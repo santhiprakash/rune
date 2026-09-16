@@ -30,6 +30,10 @@ func (e ebitenInputManager) AppendInputEvents(buf []ebiten.InputEvent) []ebiten.
 	return ebiten.AppendInputEvents(buf)
 }
 
+func (e ebitenInputManager) KeyName(key ebiten.Key) string {
+	return ebiten.KeyName(key)
+}
+
 func (e ebitenInputManager) Wheel() (float64, float64) {
 	return ebiten.Wheel()
 }

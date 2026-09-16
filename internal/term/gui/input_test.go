@@ -1009,11 +1009,16 @@ func newTestInput(t *testing.T) (*mockInputManager, *input) {
 }
 
 type mockInputManager struct {
-	events []ebiten.InputEvent
+	events   []ebiten.InputEvent
+	keyNames map[ebiten.Key]string
 }
 
 func (m *mockInputManager) AppendInputEvents(buf []ebiten.InputEvent) []ebiten.InputEvent {
 	return append(buf, m.events...)
+}
+
+func (m *mockInputManager) KeyName(key ebiten.Key) string {
+	return m.keyNames[key]
 }
 
 func TestInputKeyMapping(t *testing.T) {
@@ -1241,6 +1246,118 @@ func TestInputKeyMapping(t *testing.T) {
 	for _, test := range suite {
 		t.Run(test.description, func(t *testing.T) {
 			mock, input := newTestInput(t)
+			input.setKeyMapping(test.mapping)
+			mock.events = slices.Concat(test.events, text(test.chars...))
+
+			events := input.processEvents(nil)
+			if len(test.expectedEvents) == 0 {
+				assert.Empty(t, events)
+				return
+			}
+			require.Equal(t, len(test.expectedEvents), len(events))
+			assert.Equal(t, test.expectedEvents, events)
+		})
+	}
+}
+
+// TestKeyDispatchLayoutAware asserts that modifier chords resolve the key
+// through the active keyboard layout rather than the US QWERTY position the
+// ebiten key constant names. On Colemak the character 'p' is produced by the
+// physical QWERTY R position, so a binding written as <c-s-p> must fire when
+// the user presses Ctrl+Shift+physical-R.
+func TestKeyDispatchLayoutAware(t *testing.T) {
+	colemak := map[ebiten.Key]string{
+		ebiten.KeyR: "p",
+		ebiten.KeyP: ";",
+	}
+	suite := []struct {
+		description    string
+		keyNames       map[ebiten.Key]string
+		mapping        map[term.KeyComb]term.KeyComb
+		events         []ebiten.InputEvent
+		chars          []rune
+		expectedEvents []term.Event
+	}{
+		{
+			description: "colemak: ctrl+shift+p fires on the key that types p",
+			keyNames:    colemak,
+			events:      shortcut(press(ebiten.KeyR, ebiten.KeyModControl, ebiten.KeyModShift)),
+			expectedEvents: []term.Event{
+				{Type: term.EventKey, Mod: term.ModCtrl, Ch: 'P',
+					Raw: getCharEscapeSequence('P', term.ModCtrl)},
+			},
+		},
+		{
+			description: "colemak: the physical p position resolves to its layout char",
+			keyNames:    colemak,
+			events:      shortcut(press(ebiten.KeyP, ebiten.KeyModControl)),
+			expectedEvents: []term.Event{
+				{Type: term.EventKey, Mod: term.ModCtrl, Ch: ';',
+					Raw: getCharEscapeSequence(';', term.ModCtrl)},
+			},
+		},
+		{
+			description: "dvorak: alt+x fires on the key that types x",
+			keyNames:    map[ebiten.Key]string{ebiten.KeyQ: "x"},
+			events:      shortcut(press(ebiten.KeyQ, ebiten.KeyModAlt)),
+			expectedEvents: []term.Event{
+				{Type: term.EventKey, Mod: term.ModAlt, Ch: 'x',
+					Raw: getCharEscapeSequence('x', term.ModAlt)},
+			},
+		},
+		{
+			description: "empty key name falls back to the physical key",
+			keyNames:    map[ebiten.Key]string{ebiten.KeyP: ""},
+			events:      shortcut(press(ebiten.KeyP, ebiten.KeyModControl, ebiten.KeyModShift)),
+			expectedEvents: []term.Event{
+				{Type: term.EventKey, Mod: term.ModCtrl, Ch: 'P',
+					Raw: getCharEscapeSequence('P', term.ModCtrl)},
+			},
+		},
+		{
+			description: "unmapped key name falls back to the physical key",
+			keyNames:    map[ebiten.Key]string{ebiten.KeyP: "\u044f"},
+			events:      shortcut(press(ebiten.KeyP, ebiten.KeyModControl, ebiten.KeyModShift)),
+			expectedEvents: []term.Event{
+				{Type: term.EventKey, Mod: term.ModCtrl, Ch: 'P',
+					Raw: getCharEscapeSequence('P', term.ModCtrl)},
+			},
+		},
+		{
+			description: "plain char keys still dispatch through the text commit",
+			keyNames:    colemak,
+			events:      action(press(ebiten.KeyR), 'p'),
+			expectedEvents: []term.Event{
+				{Type: term.EventKey, Ch: 'p', Raw: []byte("p")},
+			},
+		},
+		{
+			description: "key remaps match the layout key, not the physical position",
+			keyNames:    colemak,
+			mapping: map[term.KeyComb]term.KeyComb{
+				{Mod: term.ModCtrl, Ch: 'P'}: {Mod: term.ModMeta, Ch: 'P'},
+			},
+			events: shortcut(press(ebiten.KeyR, ebiten.KeyModControl, ebiten.KeyModShift)),
+			expectedEvents: []term.Event{
+				{Type: term.EventKey, Mod: term.ModMeta, Ch: 'P',
+					Raw: getCharEscapeSequence('P', term.ModMeta)},
+			},
+		},
+		{
+			description: "numpad keys keep their physical identity",
+			keyNames:    map[ebiten.Key]string{ebiten.KeyNumpad1: "x"},
+			events:      shortcut(press(ebiten.KeyNumpad1, ebiten.KeyModControl)),
+			expectedEvents: []term.Event{
+				{Type: term.EventKey, Mod: term.ModCtrl, Ch: '1',
+					Raw: getCharEscapeSequence('1', term.ModCtrl)},
+			},
+		},
+	}
+
+	for _, test := range suite {
+		t.Run(test.description, func(t *testing.T) {
+			mock, input := newTestInput(t)
+			mock.keyNames = test.keyNames
 			input.setKeyMapping(test.mapping)
 			mock.events = slices.Concat(test.events, text(test.chars...))
 

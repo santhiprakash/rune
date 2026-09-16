@@ -18,6 +18,8 @@ package gui
 
 import (
 	"fmt"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/unstablebuild/rune-go-sdk/term"
@@ -27,6 +29,7 @@ import (
 // abstracts ebiten* input methods
 type keysManager interface {
 	AppendInputEvents([]ebiten.InputEvent) []ebiten.InputEvent
+	KeyName(key ebiten.Key) string
 }
 
 // claimedSourceHistory bounds how many key actions Rune remembers claiming.
@@ -179,8 +182,8 @@ func (i *input) processEvents(dst []term.Event) []term.Event {
 		case ebiten.KeyMeta, ebiten.KeyMetaLeft, ebiten.KeyMetaRight:
 			lookupMods &^= ebiten.KeyModSuper
 		}
-		key, mods := ev.Key, ev.Mods
-		rep, remapped := i.keyMapping[ebiten.KeyEvent{Key: ev.Key, Mods: lookupMods}]
+		key, mods := i.layoutKey(ev.Key), ev.Mods
+		rep, remapped := i.keyMapping[ebiten.KeyEvent{Key: key, Mods: lookupMods}]
 		if remapped {
 			key, mods = rep.Key, rep.Mods
 		}
@@ -315,6 +318,63 @@ func isModifierKey(key ebiten.Key) bool {
 	}
 	return false
 }
+
+// layoutKey resolves the key the active keyboard layout assigns to a
+// character-producing key position. Ebiten key constants name the US QWERTY
+// position rather than the produced character, so on a non-QWERTY layout the
+// reported key does not match the character a binding or remap was written
+// against. The platform key name maps the position back to the character it
+// produces, which runeKey then maps to the key that character names.
+func (i *input) layoutKey(key ebiten.Key) ebiten.Key {
+	if _, _, ok := keyToBaseAndShift(key); !ok || isNumpadKey(key) {
+		return key
+	}
+	name := i.input.KeyName(key)
+	r, size := utf8.DecodeRuneInString(name)
+	if size == 0 || size != len(name) {
+		return key
+	}
+	if mapped, ok := runeKey[r]; ok {
+		return mapped
+	}
+	if mapped, ok := runeKey[unicode.ToLower(r)]; ok {
+		return mapped
+	}
+	return key
+}
+
+// isNumpadKey reports whether key is a keypad key. Keypad positions are
+// fixed rather than layout-mapped, and the platform key-name lookup does
+// not report them.
+func isNumpadKey(key ebiten.Key) bool {
+	return key >= ebiten.KeyNumpad0 && key <= ebiten.KeyNumpadSubtract
+}
+
+// runeKey maps an unshifted character to the key that produces it on a US
+// layout, so a key position's layout name can be resolved back to the key a
+// binding was written against. Non-keypad keys register first so characters
+// the keypad duplicates ('1', '/', ...) resolve to the main key block.
+var runeKey = func() map[rune]ebiten.Key {
+	m := make(map[rune]ebiten.Key, 64)
+	add := func(key ebiten.Key) {
+		base, _, ok := keyToBaseAndShift(key)
+		if !ok {
+			return
+		}
+		if _, dup := m[base]; !dup {
+			m[base] = key
+		}
+	}
+	for key := ebiten.Key(0); key <= ebiten.KeyMax; key++ {
+		if !isNumpadKey(key) {
+			add(key)
+		}
+	}
+	for key := ebiten.KeyNumpad0; key <= ebiten.KeyNumpadSubtract; key++ {
+		add(key)
+	}
+	return m
+}()
 
 // keyToBaseAndShift returns the base and shift characters for a
 // character-producing key. Returns false for non-character keys.
