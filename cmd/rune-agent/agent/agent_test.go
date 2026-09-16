@@ -1007,6 +1007,95 @@ func searchSubstring(s, substr string) bool {
 	return false
 }
 
+func TestCompactDialoguePlumbsMaxOutputTokens(t *testing.T) {
+	t.Run("set option forwards to summarize request", func(t *testing.T) {
+		svc := &mockService{
+			responses: []mockResponse{stopResponse("Summary")},
+		}
+		store := newMockStore()
+
+		d := dialoguemanager.Dialogue{
+			ID: "d",
+			Messages: []llmapi.Message{
+				{Role: llmapi.RoleSystem, Content: "sys"},
+				{Role: llmapi.RoleUser, Content: "hello"},
+				{Role: llmapi.RoleAssistant, Content: "world"},
+			},
+			Version: 1,
+		}
+		store.mu.Lock()
+		store.data["d"] = d
+		store.mu.Unlock()
+
+		_, _, err := CompactDialogue(
+			context.Background(), svc, llmapi.ModelEntry{}, store, d,
+			WithMaxOutputTokens(8192),
+		)
+		require.NoError(t, err)
+
+		require.GreaterOrEqual(t, svc.getCallCount(), 1)
+		assert.Equal(t, 8192, svc.requests[0].MaxOutputTokens,
+			"summarize request must carry the session max-output-token budget so long summaries are not truncated mid-sentence")
+	})
+
+	t.Run("unset option leaves field at zero", func(t *testing.T) {
+		svc := &mockService{
+			responses: []mockResponse{stopResponse("Summary")},
+		}
+		store := newMockStore()
+
+		d := dialoguemanager.Dialogue{
+			ID: "d",
+			Messages: []llmapi.Message{
+				{Role: llmapi.RoleSystem, Content: "sys"},
+				{Role: llmapi.RoleUser, Content: "hello"},
+				{Role: llmapi.RoleAssistant, Content: "world"},
+			},
+			Version: 1,
+		}
+		store.mu.Lock()
+		store.data["d"] = d
+		store.mu.Unlock()
+
+		_, _, err := CompactDialogue(context.Background(), svc, llmapi.ModelEntry{}, store, d)
+		require.NoError(t, err)
+
+		require.GreaterOrEqual(t, svc.getCallCount(), 1)
+		assert.Equal(t, 0, svc.requests[0].MaxOutputTokens,
+			"provider fallback default must apply when caller does not pass a budget")
+	})
+
+	t.Run("explicit zero option leaves field at zero", func(t *testing.T) {
+		svc := &mockService{
+			responses: []mockResponse{stopResponse("Summary")},
+		}
+		store := newMockStore()
+
+		d := dialoguemanager.Dialogue{
+			ID: "d",
+			Messages: []llmapi.Message{
+				{Role: llmapi.RoleSystem, Content: "sys"},
+				{Role: llmapi.RoleUser, Content: "hello"},
+				{Role: llmapi.RoleAssistant, Content: "world"},
+			},
+			Version: 1,
+		}
+		store.mu.Lock()
+		store.data["d"] = d
+		store.mu.Unlock()
+
+		_, _, err := CompactDialogue(
+			context.Background(), svc, llmapi.ModelEntry{}, store, d,
+			WithMaxOutputTokens(0),
+		)
+		require.NoError(t, err)
+
+		require.GreaterOrEqual(t, svc.getCallCount(), 1)
+		assert.Equal(t, 0, svc.requests[0].MaxOutputTokens,
+			"explicit zero must not become a positive budget")
+	})
+}
+
 func TestAgentRun_StoreGetError(t *testing.T) {
 	svc := &mockService{responses: []mockResponse{stopResponse("hi")}}
 	store := newMockStore()
@@ -4350,7 +4439,7 @@ func TestSummarizeEmptySummaryReturnsError(t *testing.T) {
 				{Role: llmapi.RoleUser, Content: "hello"},
 				{Role: llmapi.RoleAssistant, Content: "hi there"},
 			}
-			_, err := Summarize(context.Background(), svc, llmapi.ModelEntry{}, msgs)
+			_, err := Summarize(context.Background(), svc, llmapi.ModelEntry{}, msgs, 0)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "empty summary")
 		})

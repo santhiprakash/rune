@@ -1639,7 +1639,10 @@ func (a *Agent) compact(
 		summarizeSvc = a.config.CompactSvc
 	}
 
-	compactedMsgs, archivedID, err := CompactDialogue(ctx, summarizeSvc, a.config.Model, a.store, d)
+	compactedMsgs, archivedID, err := CompactDialogue(
+		ctx, summarizeSvc, a.config.Model, a.store, d,
+		WithMaxOutputTokens(a.MaxOutputTokens()),
+	)
 	if err != nil {
 		emit(ctx, ch, Event{Type: EventError, Error: fmt.Errorf("compact: %v", err)})
 		return dialoguemanager.Dialogue{}, err
@@ -1840,8 +1843,10 @@ func cleanSummary(raw string) string {
 }
 
 // Summarize sends the given messages to the LLM and asks it to produce
-// a structured summary. It returns the cleaned summary text.
-func Summarize(ctx context.Context, svc llmapi.Service, model llmapi.ModelEntry, messages []llmapi.Message) (string, error) {
+// a structured summary. It returns the cleaned summary text. When
+// maxOutputTokens is greater than zero it is set on the request so the
+// provider's smaller default cap does not truncate long summaries.
+func Summarize(ctx context.Context, svc llmapi.Service, model llmapi.ModelEntry, messages []llmapi.Message, maxOutputTokens int) (string, error) {
 	messages = normalizeMessages(slices.Clone(messages))
 
 	prompt := llmapi.Message{
@@ -1850,6 +1855,9 @@ func Summarize(ctx context.Context, svc llmapi.Service, model llmapi.ModelEntry,
 	}
 	summaryReq := llmapi.Request{
 		Messages: append(messages, prompt),
+	}
+	if maxOutputTokens > 0 {
+		summaryReq.MaxOutputTokens = maxOutputTokens
 	}
 
 	sanitizeRequest(&summaryReq)
@@ -1918,7 +1926,7 @@ func CompactDialogue(
 		return nil, "", errors.New(reason)
 	}
 
-	summaryText, err := Summarize(ctx, svc, model, d.Messages)
+	summaryText, err := Summarize(ctx, svc, model, d.Messages, copts.maxOutputTokens)
 	if err != nil {
 		return nil, "", err
 	}
@@ -1988,13 +1996,22 @@ func sessionStartSource(isNew bool) string {
 type CompactOption func(*compactOptions)
 
 type compactOptions struct {
-	hooks *hooks.Runner
+	hooks           *hooks.Runner
+	maxOutputTokens int
 }
 
 // WithCompactHooks fires the PreCompact hook (manual trigger) before
 // summarizing. A blocked hook turns into a returned error.
 func WithCompactHooks(r *hooks.Runner) CompactOption {
 	return func(o *compactOptions) { o.hooks = r }
+}
+
+// WithMaxOutputTokens sets the max-output-token budget for the summarize
+// request. A value of 0 (or unset) leaves the provider fallback default
+// in place. Pass the session value here so long summaries are not
+// truncated mid-sentence by the provider's smaller default cap.
+func WithMaxOutputTokens(n int) CompactOption {
+	return func(o *compactOptions) { o.maxOutputTokens = n }
 }
 
 // toolInputJSON returns the tool's raw arguments string as a
