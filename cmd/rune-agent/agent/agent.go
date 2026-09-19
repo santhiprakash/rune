@@ -40,6 +40,7 @@ import (
 	"unstable.build/rune/cmd/rune-agent/agent/utf8validate"
 	"unstable.build/rune/cmd/rune-agent/dialogue/dialoguemanager"
 	"unstable.build/rune/cmd/rune-agent/hooks"
+	"unstable.build/rune/cmd/rune-agent/llm/llmarg"
 	"unstable.build/rune/internal/debug"
 	"unstable.build/rune/internal/ide/idelsp/languages"
 )
@@ -1627,6 +1628,20 @@ func (a *Agent) persistMessages(
 	return true
 }
 
+// summarizeMaxOutputTokens returns the output-token budget to use for a
+// compaction summary. An explicit session override is respected; otherwise
+// a default higher than the Anthropic 8192 fallback is used, clamped to the
+// bound model's documented ceiling so the request is not rejected.
+func summarizeMaxOutputTokens(sessionValue int, model llmapi.ModelEntry) int {
+	if sessionValue > 0 {
+		return sessionValue
+	}
+	if ceiling := llmarg.MaxOutputTokens(model); ceiling > 0 {
+		return min(defaultSummarizeMaxTokens, ceiling)
+	}
+	return 0
+}
+
 // compact summarizes the conversation, persists the compacted messages,
 // and returns them. On failure it emits EventError and returns the
 // error so the caller can fall through.
@@ -1641,7 +1656,7 @@ func (a *Agent) compact(
 
 	compactedMsgs, archivedID, err := CompactDialogue(
 		ctx, summarizeSvc, a.config.Model, a.store, d,
-		WithMaxOutputTokens(a.MaxOutputTokens()),
+		WithMaxOutputTokens(summarizeMaxOutputTokens(a.MaxOutputTokens(), a.config.Model)),
 	)
 	if err != nil {
 		emit(ctx, ch, Event{Type: EventError, Error: fmt.Errorf("compact: %v", err)})
@@ -1752,6 +1767,12 @@ const CompactResumePrefix = "Continue executing the approved plan immediately. "
 // CompactResumeSuffix appends an explicit encouragement to continue execution.
 const CompactResumeSuffix = "\n\nKeep implementing from this state."
 
+// defaultSummarizeMaxTokens is the fallback output-token budget for compaction
+// summaries when the session has not set an explicit max-output-token override.
+// It is higher than the Anthropic client default (8192) so long summaries are
+// not truncated mid-sentence on a default install.
+const defaultSummarizeMaxTokens = 32768
+
 // ArchivedID returns the base archive dialogue ID for the given dialogue.
 // It strips any existing "-archived" (with optional numeric suffix) to avoid accumulation.
 func ArchivedID(dialogueID string) string {
@@ -1846,7 +1867,13 @@ func cleanSummary(raw string) string {
 // a structured summary. It returns the cleaned summary text. When
 // maxOutputTokens is greater than zero it is set on the request so the
 // provider's smaller default cap does not truncate long summaries.
-func Summarize(ctx context.Context, svc llmapi.Service, model llmapi.ModelEntry, messages []llmapi.Message, maxOutputTokens int) (string, error) {
+func Summarize(
+	ctx context.Context,
+	svc llmapi.Service,
+	model llmapi.ModelEntry,
+	messages []llmapi.Message,
+	maxOutputTokens int,
+) (string, error) {
 	messages = normalizeMessages(slices.Clone(messages))
 
 	prompt := llmapi.Message{

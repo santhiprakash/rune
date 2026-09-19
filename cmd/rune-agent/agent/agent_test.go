@@ -4323,6 +4323,111 @@ func TestAutoCompact(t *testing.T) {
 	})
 }
 
+func TestAutoCompactPlumbsMaxOutputTokens(t *testing.T) {
+	countCalls := 0
+	svc := &mockService{
+		responses: []mockResponse{
+			// 1st call: summarize (triggered by auto-compact)
+			stopResponse("Summary of conversation"),
+			// 2nd call: post-compaction normal response
+			stopResponse("Continuing after compaction"),
+		},
+		contextWindowN: 1000,
+		countTokensFn: func(_ llmapi.ModelEntry, msgs []llmapi.Message) (int, error) {
+			countCalls++
+			if countCalls <= 1 {
+				// First count: 90% usage triggers auto-compact.
+				return 900, nil
+			}
+			// After compaction, usage is low.
+			return 100, nil
+		},
+	}
+	store := newMockStore()
+	require.NoError(t, store.Create(context.Background(), dialoguemanager.Dialogue{
+		ID: "d",
+		Messages: []llmapi.Message{
+			{Role: llmapi.RoleSystem, Content: "test system prompt"},
+			{Role: llmapi.RoleUser, Content: "prior"},
+			{Role: llmapi.RoleAssistant, Content: "prior answer"},
+		},
+	}))
+
+	ag := NewAgent(svc, NewRegistry(), noSkills(), store, NoMemory(), Config{
+		SystemPrompt: "test system prompt",
+		Model: llmapi.ModelEntry{
+			Provider:      "anthropic",
+			Name:          "claude-sonnet-4-5",
+			ContextWindow: 1000,
+		},
+	})
+	ag.SetMaxOutputTokens(8192)
+
+	it := ag.Run(context.Background(), "d", "do stuff")
+	events := collectEvents(t, it)
+
+	// 2 LLM calls: summarize + post-compact
+	require.Equal(t, 2, svc.getCallCount())
+	assert.Equal(t, 8192, svc.requests[0].MaxOutputTokens,
+		"auto-compact summarize request must use the session max-output-token budget")
+	assert.True(t, hasEventType(events, EventCompacting))
+	assert.True(t, hasEventType(events, EventCompacted))
+	assert.True(t, hasEventType(events, EventDone))
+}
+
+func TestAutoCompactUsesDefaultMaxOutputTokens(t *testing.T) {
+	countCalls := 0
+	svc := &mockService{
+		responses: []mockResponse{
+			// 1st call: summarize (triggered by auto-compact)
+			stopResponse("Summary of conversation"),
+			// 2nd call: post-compaction normal response
+			stopResponse("Continuing after compaction"),
+		},
+		contextWindowN: 1000,
+		countTokensFn: func(_ llmapi.ModelEntry, msgs []llmapi.Message) (int, error) {
+			countCalls++
+			if countCalls <= 1 {
+				// First count: 90% usage triggers auto-compact.
+				return 900, nil
+			}
+			// After compaction, usage is low.
+			return 100, nil
+		},
+	}
+	store := newMockStore()
+	require.NoError(t, store.Create(context.Background(), dialoguemanager.Dialogue{
+		ID: "d",
+		Messages: []llmapi.Message{
+			{Role: llmapi.RoleSystem, Content: "test system prompt"},
+			{Role: llmapi.RoleUser, Content: "prior"},
+			{Role: llmapi.RoleAssistant, Content: "prior answer"},
+		},
+	}))
+
+	ag := NewAgent(svc, NewRegistry(), noSkills(), store, NoMemory(), Config{
+		SystemPrompt: "test system prompt",
+		Model: llmapi.ModelEntry{
+			Provider:      "anthropic",
+			Name:          "claude-sonnet-4-5",
+			ContextWindow: 1000,
+		},
+	})
+	// No SetMaxOutputTokens call: the agent should pick a model-capped default
+	// higher than the provider fallback.
+
+	it := ag.Run(context.Background(), "d", "do stuff")
+	events := collectEvents(t, it)
+
+	// 2 LLM calls: summarize + post-compact
+	require.Equal(t, 2, svc.getCallCount())
+	assert.Equal(t, 32768, svc.requests[0].MaxOutputTokens,
+		"auto-compact summarize request must use the model-capped default budget")
+	assert.True(t, hasEventType(events, EventCompacting))
+	assert.True(t, hasEventType(events, EventCompacted))
+	assert.True(t, hasEventType(events, EventDone))
+}
+
 // TestAutoCompact_SkipsWhenNothingToCompact pins down the fix for the
 // "agent immediately auto-compacts on a fresh 'hello' and never makes
 // progress" bug observed with small-context local models (e.g. 8192-ctx
