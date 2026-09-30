@@ -20,9 +20,11 @@ import (
 	"fmt"
 	"runtime"
 	"strings"
+	"sync"
 
 	"github.com/unstablebuild/rune-go-sdk/clipboard"
 	"github.com/unstablebuild/rune-go-sdk/clipboard/sysclip"
+	"unstable.build/rune/internal/debug"
 )
 
 // NewSystemClipboard returns a clipboard.Register backed by the OS
@@ -35,6 +37,11 @@ type systemClipboard struct {
 	sys     clipboard.Register
 	mem     clipboard.Register
 	openErr error
+
+	mu      sync.Mutex
+	writing bool
+	queued  bool
+	pending clipboard.Data
 }
 
 func newSystemClipboard(sys clipboard.Register, err error) clipboard.Register {
@@ -57,10 +64,55 @@ func (c *systemClipboard) Copy(registerID string, data clipboard.Data) error {
 	if c.openErr != nil {
 		return c.openErr
 	}
-	if err := c.sys.Copy(registerID, data); err != nil {
+
+	c.mu.Lock()
+	if c.writing {
+		// The OS backend shells out once per call (wl-copy on Wayland), so a
+		// burst such as a held `.` repeating a Vim delete must not forward
+		// every payload: only the newest one still matters once the in-flight
+		// write finishes.
+		c.pending = data
+		c.queued = true
+		c.mu.Unlock()
+		return nil
+	}
+	c.writing = true
+	c.mu.Unlock()
+
+	err := c.sys.Copy(registerID, data)
+
+	c.mu.Lock()
+	if c.queued {
+		go debug.CapturePanicReport(c.drain)
+	} else {
+		c.writing = false
+	}
+	c.mu.Unlock()
+
+	if err != nil {
 		return fmt.Errorf("system clipboard: %s", err.Error())
 	}
 	return nil
+}
+
+// drain forwards queued payloads to the OS clipboard until the burst quiets.
+// It inherits the writer role (writing stays set) so copies arriving during a
+// slow subprocess keep coalescing instead of spawning one of their own. Errors
+// are dropped: callers ignore Copy errors and the next settled write still
+// surfaces a broken OS clipboard.
+func (c *systemClipboard) drain() {
+	for {
+		c.mu.Lock()
+		if !c.queued {
+			c.writing = false
+			c.mu.Unlock()
+			return
+		}
+		data := c.pending
+		c.queued = false
+		c.mu.Unlock()
+		_ = c.sys.Copy(clipboard.DefaultRegisterID, data)
+	}
 }
 
 func (c *systemClipboard) Paste(registerID string) (clipboard.Data, error) {
