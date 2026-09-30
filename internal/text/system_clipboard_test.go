@@ -18,15 +18,11 @@ package text
 
 import (
 	"errors"
-	"fmt"
 	"runtime"
-	"sync"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 	"github.com/unstablebuild/rune-go-sdk/clipboard"
-	"unstable.build/rune/internal/debug"
 )
 
 func TestSystemClipboardDelegatesWhenAvailable(t *testing.T) {
@@ -137,82 +133,4 @@ func TestSystemClipboardOnlyDefaultRegisterReachesOS(t *testing.T) {
 	require.NoError(t, clip.Copy(clipboard.DefaultRegisterID, clipboard.Data{Text: "yanked"}))
 	require.Equal(t, []string{clipboard.DefaultRegisterID}, sys.copied,
 		"only the default register write may reach the OS clipboard")
-}
-
-// burstRegister holds its first system Copy on a gate so a burst of copies
-// overlaps one in-flight OS write, the way wl-copy latency stretches a Vim
-// `.` repeat. It counts what actually reaches the OS layer.
-type burstRegister struct {
-	clipboard.Register
-	entered chan struct{}
-	gate    chan struct{}
-
-	mu    sync.Mutex
-	calls int
-	last  clipboard.Data
-}
-
-func (r *burstRegister) Copy(registerID string, data clipboard.Data) error {
-	r.mu.Lock()
-	r.calls++
-	r.last = data
-	first := r.calls == 1
-	r.mu.Unlock()
-	if first {
-		close(r.entered)
-		<-r.gate
-	}
-	return r.Register.Copy(registerID, data)
-}
-
-// TestSystemClipboardCoalescesBurstCopies reproduces the hang from holding `.`
-// to repeat a Vim dw: every repeated delete re-copied the deleted word and
-// each copy shelled out a fresh wl-copy, flooding Wayland with subprocesses.
-// Copies landing while an OS write is in flight must coalesce so the newest
-// payload — not every payload — is forwarded.
-func TestSystemClipboardCoalescesBurstCopies(t *testing.T) {
-	sys := &burstRegister{
-		Register: clipboard.NewInMemory(),
-		entered:  make(chan struct{}),
-		gate:     make(chan struct{}),
-	}
-	clip := newSystemClipboard(sys, nil)
-
-	first := make(chan error, 1)
-	go debug.CapturePanicReport(func() {
-		first <- clip.Copy(clipboard.DefaultRegisterID, clipboard.Data{Text: "word-0"})
-	})
-	<-sys.entered
-
-	const burst = 50
-	for i := 1; i <= burst; i++ {
-		require.NoError(t, clip.Copy(
-			clipboard.DefaultRegisterID, clipboard.Data{Text: fmt.Sprintf("word-%d", i)}))
-	}
-	close(sys.gate)
-
-	select {
-	case err := <-first:
-		require.NoError(t, err)
-	case <-time.After(5 * time.Second):
-		t.Fatal("first copy did not return")
-	}
-
-	require.Eventually(t, func() bool {
-		sys.mu.Lock()
-		defer sys.mu.Unlock()
-		return sys.calls == 2
-	}, 5*time.Second, time.Millisecond,
-		"one in-flight copy plus one coalesced drain must replace a subprocess per repeat")
-
-	sys.mu.Lock()
-	require.Equal(t, fmt.Sprintf("word-%d", burst), sys.last.Text,
-		"the OS clipboard must end up holding the newest payload, not an intermediate")
-	sys.mu.Unlock()
-
-	require.NoError(t, clip.Copy(clipboard.DefaultRegisterID, clipboard.Data{Text: "next"}))
-	sys.mu.Lock()
-	require.Equal(t, 3, sys.calls,
-		"a copy that arrives after the burst settles must still write through")
-	sys.mu.Unlock()
 }

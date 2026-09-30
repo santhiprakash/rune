@@ -818,7 +818,7 @@ func runGUI(
 		*flagWorkspace, *flagZdotDir, filenames,
 		launchCmd, runner, mu, publishEvent, cellPixelSize, setAltModifier,
 		func(u *url.URL) error { return extbrowser.Browse(u) },
-		text.NewSystemClipboard(), os.TempDir(), rootCfg, trust,
+		text.NewAsyncSystemClipboard(), os.TempDir(), rootCfg, trust,
 	)
 	if err != nil {
 		fmt.Printf("ide: %s", err)
