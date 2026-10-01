@@ -3274,36 +3274,31 @@ func (vi *viHandlerImpl) handleDelete(ev term.Event) (quit, handled bool) {
 	return
 }
 
-// selectChangeWord selects the range a `cw`/`cW` delete acts on and reports
-// whether the event is such a motion. In Vim `cw` is a `ce` in disguise: the
-// change stops at the end of the word instead of consuming the whitespace
-// after it, and a word end already under the cursor counts as the first end
-// reached, so a single `cw` there covers just the cell under it where `ce`
-// would reach the following word's end. On a blank the plain `w` motion
-// applies.
+// selectChangeWord selects the range a `cw`/`cW` operator acts on and reports
+// whether the event is such a motion. The range runs from the cursor to the
+// end of the count-th Vim word end: a word end under the cursor counts as the
+// first end, so `cw` there covers just the cell under it. Blank and missing
+// cells return false so the caller falls back to the plain `w` motion.
 func (vi *viHandlerImpl) selectChangeWord(ev term.Event) bool {
 	if !vi.deleteInsert || vi.moveMode != moveNone || ev.Mod != 0 ||
 		(ev.Ch != 'w' && ev.Ch != 'W') {
 		return false
 	}
 	cell, ok := vi.cursor.Cell()
-	if !ok || isWordBlank(cell.Ch) {
+	if !ok || text.IsWordObjectBlank(cell.Ch) {
 		return false
 	}
 	bigWord := ev.Ch == 'W'
 	before := vi.cursorAtScroll()
 	vi.cursor.Select()
 	count := vi.motionCount()
-	if vi.atWordEnd(before, cell.Ch, bigWord) {
+	if vi.cursor.AtWordObjectEnd(bigWord) {
 		count--
-	}
-	move := vi.cursor.MoveRightEndWord
-	if bigWord {
-		move = vi.cursor.MoveRightEndWordGroup
 	}
 	for i := 0; i < count; i++ {
 		prev := vi.cursor.CursorAtScroll()
-		if !move() && vi.cursor.CursorAtScroll() == prev {
+		if !vi.cursor.MoveRightWordObjectEnd(bigWord) &&
+			vi.cursor.CursorAtScroll() == prev {
 			break
 		}
 	}
@@ -3313,29 +3308,6 @@ func (vi *viHandlerImpl) selectChangeWord(ev term.Event) bool {
 		vi.cursor.SelectRange(before, term.Coordinates{Y: before.Y, X: before.X + 1})
 	}
 	return true
-}
-
-// atWordEnd reports whether pos holds the last cell of a word: the cell
-// after it is a word boundary, or there is none on the line. A punctuation
-// cell is its own word end, matching how `e` lands on each special rune.
-// For `W` only blanks and the line end bound a WORD.
-func (vi *viHandlerImpl) atWordEnd(pos term.Coordinates, cur rune, bigWord bool) bool {
-	next, ok := vi.less.Buffer().Cell(term.Coordinates{Y: pos.Y, X: pos.X + 1})
-	if !ok || isWordBlank(next.Ch) {
-		return true
-	}
-	if bigWord {
-		return false
-	}
-	return !isWordRune(cur) || !isWordRune(next.Ch)
-}
-
-func isWordRune(r rune) bool {
-	return r == '_' || unicode.IsLetter(r) || unicode.IsDigit(r)
-}
-
-func isWordBlank(r rune) bool {
-	return r == ' ' || r == '\t' || r == '\x00'
 }
 
 func (vi *viHandlerImpl) handleGo(ev term.Event) (quit, handled bool) {
