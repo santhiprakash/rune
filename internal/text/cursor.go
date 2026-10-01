@@ -1101,7 +1101,7 @@ func (c *Cursor) AtWordObjectEnd(bigWord bool) bool {
 
 // MoveRightWordObjectEnd moves the cursor right to the end of the current or
 // next word, where a word is a maximal run of cells with the same wordClass:
-// word runes (IsWordObjectRune) and other punctuation are separate words,
+// word runes (isWordObjectRune) and other punctuation are separate words,
 // except under bigWord where every non-blank run is a single word. Blank runs
 // and empty lines are never word ends, so they are skipped. Returns false and
 // leaves the cursor in place when no word end exists to the right.
@@ -1134,11 +1134,13 @@ func (c *Cursor) wordObjectEndAt(pos term.Coordinates, bigWord bool) bool {
 	return !ok || c.wordClass(nextCell.Ch, bigWord) != class
 }
 
+// IsWordObjectBlank reports whether r is blank for word-object motions:
+// a space, a tab, or the \x00 rune of an empty cell that was never written.
 func IsWordObjectBlank(r rune) bool {
 	return r == '\x00' || r == ' ' || r == '\t'
 }
 
-func IsWordObjectRune(r rune) bool {
+func isWordObjectRune(r rune) bool {
 	return unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_'
 }
 
@@ -1320,7 +1322,7 @@ func (c *Cursor) wordClass(r rune, group bool) int {
 	if group {
 		return 1
 	}
-	if IsWordObjectRune(r) {
+	if isWordObjectRune(r) {
 		return 1
 	}
 	return 2
