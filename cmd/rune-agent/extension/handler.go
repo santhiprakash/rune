@@ -2485,7 +2485,9 @@ func createAgentCompletions(
 					setPhase(phaseCompacting)
 				case agent.EventCompacted:
 					setPhase(phaseSending)
-					onCompacted(id)
+					if onCompacted != nil {
+						onCompacted(id)
+					}
 					if ev.ArchivedDialogueID != "" {
 						select {
 						case tx <- dialoguetui.MessageEvent{

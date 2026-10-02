@@ -429,9 +429,10 @@ func (g gatedNetwork) Machines(
 	ret := make([]networkshell.Machine, 0, len(machines))
 	for _, m := range machines {
 		ret = append(ret, networkshell.Machine{
-			Hostname: m.Hostname,
-			LastSeen: m.LastSeen,
-			Online:   m.Online,
+			Hostname:  m.Hostname,
+			LastSeen:  m.LastSeen,
+			Online:    m.Online,
+			ServeOnly: m.ServeOnly,
 		})
 	}
 	return ret, nil

@@ -139,6 +139,7 @@ endif
 	release-linux-amd64 release-linux-arm64 \
 	release-linux-amd64-native release-linux-arm64-native \
 	release-linux-amd64-cross release-linux-arm64-cross \
+	docker-build docker-push \
 	check-release-tag \
 	dist-linux-amd64 dist-linux-arm64 dist-darwin-arm64 dist-darwin-amd64 \
 	dist-linux-amd64-native dist-linux-arm64-native \
@@ -457,6 +458,30 @@ release-linux-arm64-native:
 # release-linux-*-cross are retained as aliases for the now-default cross build.
 release-linux-amd64-cross: release-linux-amd64
 release-linux-arm64-cross: release-linux-arm64
+
+# RUNE_IMAGE is the Docker Hub repository of the headless node image built
+# from deploy/rune-headless/Dockerfile, a musl build of Rune on Alpine.
+RUNE_IMAGE ?= unstablebuild/rune
+RUNE_IMAGE_PLATFORMS ?= linux/amd64,linux/arm64
+RUNE_IMAGE_BUILD = cd $(ROOT_DIR) && docker buildx build --rm \
+	-f deploy/rune-headless/Dockerfile \
+	--build-arg RUNE_BUILD_TAG="$(VERSION)" \
+	--build-arg RUNE_BUILD_COMMIT="$(COMMIT)" \
+	--build-arg RUNE_BUILD_DATE="$(strip $(BUILD_DATE))"
+
+# docker-build loads the image for the host arch into the local image
+# store, to try it before publishing.
+docker-build:
+	@$(RUNE_IMAGE_BUILD) --platform linux/$(HOST_ARCH) --load \
+		-t $(RUNE_IMAGE):$(VERSION) .
+
+# docker-push publishes the release tagged at HEAD for every platform in
+# RUNE_IMAGE_PLATFORMS, as both the tag and latest. Pushing more than one
+# platform needs a buildx builder that supports it, such as one created
+# with `docker buildx create --use`.
+docker-push: check-release-tag
+	@$(RUNE_IMAGE_BUILD) --platform $(RUNE_IMAGE_PLATFORMS) --push \
+		-t $(RUNE_IMAGE):$(VERSION) -t $(RUNE_IMAGE):latest .
 
 # dist-* are the underlying upload rules. They build the artifact via
 # their prerequisite (release-linux-* cross build or DMG-notarize) and

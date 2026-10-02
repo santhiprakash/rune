@@ -42,6 +42,7 @@ import (
 type headlessClient interface {
 	LoginWithDeviceCode(ctx context.Context) apiclient.DeviceLoginSession
 	AccountStatus(ctx context.Context) (auth.RPCUser, bool, error)
+	Logout(ctx context.Context) error
 }
 
 // runHeadless serves this machine's workspaces on the Rune network with
@@ -83,7 +84,9 @@ func runHeadless(ctx context.Context, shellRCDir string, shellRCErr error) int {
 	}
 
 	storage := newRuneStorage(*flagDataPath)
-	client, _ := newAPIClient(storage, os.TempDir(), rootCfg)
+	apicfg := apiClientConfig(os.TempDir(), rootCfg)
+	apicfg.Headless = true
+	client := apiclient.New(storage, apicfg, *flagDataPath)
 	defer client.Close()
 
 	if err := headlessLogin(ctx, client, os.Stdout); err != nil {
@@ -159,15 +162,27 @@ func headlessLogLevel(rootCfg config.Config) log.Level {
 	return level
 }
 
-// headlessLogin signs the machine in when it is not already, printing
-// the sign-in code to out and blocking until the operator enters it in
-// a browser on whatever machine they are sitting at.
+// headlessLogin signs the machine in as a serve-only machine when it is
+// not already, printing the sign-in code to out and blocking until the
+// operator enters it in a browser on whatever machine they are sitting
+// at. A sign-in with full account access is never kept: whoever took
+// the machine would hold the account.
 func headlessLogin(
 	ctx context.Context, client headlessClient, out io.Writer,
 ) error {
 	user, ok, err := client.AccountStatus(ctx)
 	if err != nil {
 		return err
+	}
+	// Left over from before headless nodes were serve-only, or in a
+	// data directory copied from a desktop install.
+	if ok && !user.ServeOnly {
+		fmt.Fprint(out, "This machine holds a sign-in with full account "+
+			"access; signing it in again to serve only.\n\n")
+		if err := client.Logout(ctx); err != nil {
+			return fmt.Errorf("discard full-access sign-in: %w", err)
+		}
+		ok = false
 	}
 	if ok {
 		fmt.Fprint(out, formatHeadlessAccount(user))
@@ -199,6 +214,12 @@ func headlessLogin(
 	}
 	if !ok {
 		return errors.New("login completed but no account token was stored")
+	}
+	if !user.ServeOnly {
+		_ = client.Logout(ctx)
+		return errors.New("the API server did not issue a serve-only " +
+			"sign-in, so this machine cannot run headless; the sign-in " +
+			"was discarded")
 	}
 	fmt.Fprint(out, formatHeadlessAccount(user))
 	return nil

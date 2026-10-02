@@ -942,6 +942,21 @@ func waitLoginShellPATH(pathDone <-chan error) error {
 func newAPIClient(
 	storage storageapi.Service, installBackupDir string, cfg config.Config,
 ) (*apiclient.Client, release.Manager) {
+	client := apiclient.New(storage,
+		apiClientConfig(installBackupDir, cfg), *flagDataPath)
+	// Release downloads are unauthenticated: the oauth transport
+	// fails client-side with auth.ErrNotAuthenticated when no token
+	// is cached, which would break package installs for logged-out
+	// users under the usage-based paywall.
+	httpClient := &http.Client{}
+	releaseManager := cdnrelease.NewManager(httpClient,
+		idepkg.ReleasesURL(*flagHTTPAddress, idepkg.HostArch()))
+	return client, releaseManager
+}
+
+// apiClientConfig is the production apiclient configuration from the
+// command-line flags and cfg.
+func apiClientConfig(installBackupDir string, cfg config.Config) apiclient.Config {
 	apicfg := apiclient.DefaultConfig()
 	apicfg.HTTPEndpointAddress = *flagHTTPAddress
 	apicfg.GRPCEndpointAddress = *flagGRPCAddress
@@ -952,15 +967,7 @@ func newAPIClient(
 	apicfg.TelemetryPeriod = telemetryPeriod
 	apicfg.InstallBackupDir = installBackupDir
 	apicfg.EditorMode = ide.EditorMode(cfg)
-	client := apiclient.New(storage, apicfg, *flagDataPath)
-	// Release downloads are unauthenticated: the oauth transport
-	// fails client-side with auth.ErrNotAuthenticated when no token
-	// is cached, which would break package installs for logged-out
-	// users under the usage-based paywall.
-	httpClient := &http.Client{}
-	releaseManager := cdnrelease.NewManager(httpClient,
-		idepkg.ReleasesURL(*flagHTTPAddress, idepkg.HostArch()))
-	return client, releaseManager
+	return apicfg
 }
 
 // trustKeyringFetcher builds the KeyringFetcher the process trust store uses
