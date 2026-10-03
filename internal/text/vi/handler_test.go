@@ -12449,6 +12449,110 @@ func TestHandleMouseWindowCoordinates(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, "bravo ", sel)
 	})
+
+	t.Run("normal mode click repositions caret and stays normal", func(t *testing.T) {
+		v := newVi()
+		v.Handle(mouseEventAt(term.MouseLeft, 6, 0))
+		v.Handle(mouseEventAt(term.MouseRelease, 6, 0))
+
+		assert.Equal(t, term.Coordinates{X: 6}, v.CursorAtScroll())
+		assert.Equal(t, normalMode, v.handler.mode())
+		_, ok := v.Selection()
+		assert.False(t, ok, "a focus click must not leave a selection")
+	})
+
+	t.Run("jitter inside the pressed cell does not select", func(t *testing.T) {
+		v := newVi()
+		v.Handle(mouseEventAt(term.MouseLeft, 6, 0))
+		v.Handle(mouseEventAt(term.MouseLeft, 6, 0))
+		v.Handle(mouseEventAt(term.MouseLeft, 6, 0))
+		v.Handle(mouseEventAt(term.MouseRelease, 6, 0))
+
+		assert.Equal(t, term.Coordinates{X: 6}, v.CursorAtScroll())
+		assert.Equal(t, normalMode, v.handler.mode())
+		_, ok := v.Selection()
+		assert.False(t, ok)
+	})
+
+	t.Run("insert mode jitter inside the pressed cell stays insert", func(t *testing.T) {
+		v := newVi()
+		v.Handle(term.Event{Type: term.EventKey, Ch: 'i'})
+
+		v.Handle(mouseEventAt(term.MouseLeft, 6, 0))
+		v.Handle(mouseEventAt(term.MouseLeft, 6, 0))
+		v.Handle(mouseEventAt(term.MouseRelease, 6, 0))
+
+		assert.Equal(t, insertMode, v.handler.mode())
+		_, ok := v.Selection()
+		assert.False(t, ok)
+	})
+
+	t.Run("click then scroll leaves no highlight behind", func(t *testing.T) {
+		v := newVi()
+		v.Handle(mouseEventAt(term.MouseLeft, 6, 0))
+		v.Handle(mouseEventAt(term.MouseRelease, 6, 0))
+		v.Handle(mouseEventAt(term.MouseWheelDown, 6, 0))
+		v.Handle(mouseEventAt(term.MouseWheelUp, 6, 0))
+
+		assert.Equal(t, normalMode, v.handler.mode())
+		_, ok := v.Selection()
+		assert.False(t, ok)
+	})
+
+	t.Run("click during visual exits visual and repositions", func(t *testing.T) {
+		v := newVi()
+		v.Handle(term.Event{Type: term.EventKey, Ch: 'v'})
+		v.Handle(term.Event{Type: term.EventKey, Ch: 'l'})
+		require.Equal(t, visualMode, v.handler.mode())
+
+		v.Handle(mouseEventAt(term.MouseLeft, 2, 0))
+		v.Handle(mouseEventAt(term.MouseRelease, 2, 0))
+
+		assert.Equal(t, term.Coordinates{X: 2}, v.CursorAtScroll())
+		assert.Equal(t, normalMode, v.handler.mode())
+		_, ok := v.Selection()
+		assert.False(t, ok)
+	})
+
+	t.Run("drag returning to the pressed cell keeps the selection live", func(t *testing.T) {
+		v := newVi()
+		v.Handle(mouseEventAt(term.MouseLeft, 6, 0))
+		v.Handle(mouseEventAt(term.MouseLeft, 7, 0))
+		v.Handle(mouseEventAt(term.MouseLeft, 6, 0))
+		v.Handle(mouseEventAt(term.MouseRelease, 6, 0))
+
+		assert.Equal(t, visualMode, v.handler.mode())
+		sel, ok := v.Selection()
+		require.True(t, ok)
+		assert.Equal(t, "b", sel)
+	})
+
+	t.Run("double-click selects the word in visual mode", func(t *testing.T) {
+		v := newVi()
+		v.Handle(mouseEventAt(term.MouseLeft, 7, 0))
+		v.Handle(mouseEventAt(term.MouseRelease, 7, 0))
+		v.Handle(mouseEventAt(term.MouseLeft, 7, 0))
+		v.Handle(mouseEventAt(term.MouseRelease, 7, 0))
+
+		assert.Equal(t, visualMode, v.handler.mode())
+		sel, ok := v.Selection()
+		require.True(t, ok)
+		assert.Equal(t, "bravo ", sel)
+	})
+
+	t.Run("jitter after double-click keeps the word selected", func(t *testing.T) {
+		v := newVi()
+		v.Handle(mouseEventAt(term.MouseLeft, 7, 0))
+		v.Handle(mouseEventAt(term.MouseRelease, 7, 0))
+		v.Handle(mouseEventAt(term.MouseLeft, 7, 0))
+		v.Handle(mouseEventAt(term.MouseLeft, 7, 0))
+		v.Handle(mouseEventAt(term.MouseRelease, 7, 0))
+
+		assert.Equal(t, visualMode, v.handler.mode())
+		sel, ok := v.Selection()
+		require.True(t, ok)
+		assert.Equal(t, "bravo ", sel)
+	})
 }
 
 func mouseEventAt(key term.Key, x, y int) term.Event {

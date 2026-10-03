@@ -25,14 +25,43 @@ import (
 // wraps text.CursorDelegate to set vi states
 type mouseDelegate struct {
 	mouse.Delegate
-	vi *viHandlerImpl
+	vi          *viHandlerImpl
+	drag        dragState
+	pressedCell term.Coordinates
 }
+
+// dragState tracks a left-button gesture. The SDK reports held-button
+// moves, including pointer jitter inside the pressed cell, through
+// SetSelectionEnd, so a plain click — for example to focus the window —
+// must neither highlight nor enter visual mode: vim only selects once
+// the drag leaves the pressed cell.
+type dragState uint8
+
+const (
+	dragIdle dragState = iota
+	// dragPressed is a held left button still inside the pressed cell.
+	dragPressed
+	// dragSelecting is a held left button whose visual selection
+	// follows the pointer.
+	dragSelecting
+)
 
 func newDelegate(vi *viHandlerImpl) mouse.Delegate {
-	return mouseDelegate{Delegate: text.CursorMouseDelegate(&vi.cursor), vi: vi}
+	return &mouseDelegate{Delegate: text.CursorMouseDelegate(&vi.cursor), vi: vi}
 }
 
-func (d mouseDelegate) SetSelectionStart(pos term.Coordinates) {
+func (d *mouseDelegate) OnAction(
+	ev term.Event, pos term.Coordinates, action mouse.Action,
+) bool {
+	// The SDK reports held-button moves without an action, so any action
+	// ends the previous left-button gesture.
+	d.drag = dragIdle
+	return d.Delegate.OnAction(ev, pos, action)
+}
+
+func (d *mouseDelegate) SetSelectionStart(pos term.Coordinates) {
+	d.drag = dragPressed
+	d.pressedCell = pos
 	if d.vi.mode() == insertMode {
 		// vim's mouse=a: reposition and stay in insert. The anchor
 		// must follow because insert-mode arrows snap back to it.
@@ -40,16 +69,27 @@ func (d mouseDelegate) SetSelectionStart(pos term.Coordinates) {
 		d.vi.anchor = d.vi.cursorAtScroll()
 		return
 	}
-	d.Delegate.SetSelectionStart(pos)
-	d.vi.setVisualMode()
+	// A click only repositions the caret; visual mode starts once the
+	// drag leaves the pressed cell, in SetSelectionEnd.
+	if _, ok := d.vi.cursor.SelectionMode(); ok {
+		d.vi.cursor.Unselect()
+	}
+	d.vi.cursor.MoveToScroll(d.vi.cursor.ScrollCoordinates(pos))
 	d.vi.anchor = d.vi.cursorAtScroll()
 	d.vi.markMatchingBrace()
 }
 
-func (d mouseDelegate) SetSelectionEnd(pos term.Coordinates) {
+func (d *mouseDelegate) SetSelectionEnd(pos term.Coordinates) {
+	if d.drag == dragPressed {
+		if pos == d.pressedCell {
+			return
+		}
+		d.drag = dragSelecting
+	}
 	if !isSelectMode(d.vi.mode()) {
-		// Drag from insert: the cursor still sits on the pressed
-		// cell, so setVisualMode anchors the selection there.
+		// Drag from insert or a plain press: the cursor still sits on
+		// the pressed cell, so setVisualMode anchors the selection
+		// there.
 		d.vi.setVisualMode()
 		d.vi.anchor = d.vi.cursorAtScroll()
 		d.vi.markMatchingBrace()
@@ -57,7 +97,32 @@ func (d mouseDelegate) SetSelectionEnd(pos term.Coordinates) {
 	d.Delegate.SetSelectionEnd(pos)
 }
 
-func (d mouseDelegate) ClearSelection() {
+// SelectWordAt is reached on the second click of a double-click, which
+// vim answers with a charwise visual selection of the word. The gesture
+// stays armed so jitter inside the pressed cell keeps the word.
+func (d *mouseDelegate) SelectWordAt(pos term.Coordinates) {
+	d.drag = dragPressed
+	d.pressedCell = pos
+	d.Delegate.SelectWordAt(pos)
+	if _, ok := d.vi.cursor.SelectionMode(); ok {
+		d.vi.setVisualMode()
+		d.vi.anchor = d.vi.cursorAtScroll()
+		d.vi.markMatchingBrace()
+	}
+}
+
+// SelectLine is reached on a triple-click, which vim answers with a
+// linewise visual selection.
+func (d *mouseDelegate) SelectLine(y int) {
+	d.Delegate.SelectLine(y)
+	if _, ok := d.vi.cursor.SelectionMode(); ok {
+		d.vi.setVisualLineMode()
+		d.vi.anchor = d.vi.cursorAtScroll()
+		d.vi.markMatchingBrace()
+	}
+}
+
+func (d *mouseDelegate) ClearSelection() {
 	if isSelectMode(d.vi.mode()) {
 		d.vi.setNormalMode()
 	}
