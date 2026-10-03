@@ -1147,3 +1147,49 @@ func TestNetworkMachineRemove(t *testing.T) {
 		})
 	}
 }
+
+// A sign-in that was revoked or has expired is only found out when its
+// refresh is refused, and nothing but the refusal tells the client to
+// sign itself out. The token proxy relays the provider's own error for
+// that; a refusal that gives no reason may be the server's fault, so it
+// leaves the sign-in in place.
+func TestClient_SignsOutWhenRefreshIsRefused(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		reply         tokenReply
+		wantSignedOut bool
+	}{
+		{
+			name: "refused as an invalid grant",
+			reply: tokenReply{status: http.StatusForbidden, body: `{"error":"invalid_grant",` +
+				`"error_description":"Unknown or invalid refresh token."}`},
+			wantSignedOut: true,
+		},
+		{
+			name: "refused without a reason",
+			reply: tokenReply{status: http.StatusForbidden, body: `{"Success":false,` +
+				`"Message":"upstream provider returned no id token","Data":""}`},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newFakeOAuthServer(t, fakeOAuthOptions{
+				tokenReplies: []tokenReply{tc.reply}})
+			t.Cleanup(srv.Close)
+			store := storagestub.NewInMemoryService()
+			seedExpiredToken(t, store)
+			config := DefaultConfig()
+			config.HTTPEndpointAddress = srv.URL
+			client := New(store, config, t.TempDir())
+			t.Cleanup(func() { _ = client.Close() })
+
+			_, err := client.NetworkMachines(t.Context())
+			require.Error(t, err)
+			assert.Equal(t, tc.wantSignedOut,
+				errors.Is(err, auth.ErrNotAuthenticated), "got %v", err)
+
+			_, signedIn, err := client.AccountStatus(t.Context())
+			require.NoError(t, err)
+			assert.Equal(t, !tc.wantSignedOut, signedIn)
+		})
+	}
+}

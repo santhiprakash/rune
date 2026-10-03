@@ -42,6 +42,7 @@ import (
 type headlessClient interface {
 	LoginWithDeviceCode(ctx context.Context) apiclient.DeviceLoginSession
 	AccountStatus(ctx context.Context) (auth.RPCUser, bool, error)
+	CheckSignIn(ctx context.Context) error
 	Logout(ctx context.Context) error
 }
 
@@ -183,6 +184,19 @@ func headlessLogin(
 			return fmt.Errorf("discard full-access sign-in: %w", err)
 		}
 		ok = false
+	}
+	// The cached copy cannot tell whether the sign-in has been revoked
+	// or has expired since it was stored; only the server can, and only
+	// when asked to refresh it.
+	if ok {
+		switch err := client.CheckSignIn(ctx); {
+		case errors.Is(err, auth.ErrNotAuthenticated):
+			fmt.Fprint(out, "This machine's sign-in was revoked or has "+
+				"expired; signing it in again.\n\n")
+			ok = false
+		case err != nil:
+			return fmt.Errorf("check sign-in: %w", err)
+		}
 	}
 	if ok {
 		fmt.Fprint(out, formatHeadlessAccount(user))

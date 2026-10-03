@@ -476,12 +476,15 @@ docker-build:
 		-t $(RUNE_IMAGE):$(VERSION) .
 
 # docker-push publishes the release tagged at HEAD for every platform in
-# RUNE_IMAGE_PLATFORMS, as both the tag and latest. Pushing more than one
-# platform needs a buildx builder that supports it, such as one created
-# with `docker buildx create --use`.
+# RUNE_IMAGE_PLATFORMS under its tag. Only a stable release also moves
+# latest: Docker Hub repoints latest at whatever was pushed last, so a
+# prerelease (v1.3.0-beta.1, any tag with a "-") must not touch it. Pushing
+# more than one platform needs a buildx builder that supports it, such as
+# one created with `docker buildx create --use`.
 docker-push: check-release-tag
 	@$(RUNE_IMAGE_BUILD) --platform $(RUNE_IMAGE_PLATFORMS) --push \
-		-t $(RUNE_IMAGE):$(VERSION) -t $(RUNE_IMAGE):latest .
+		-t $(RUNE_IMAGE):$(VERSION) \
+		$(if $(findstring -,$(VERSION)),,-t $(RUNE_IMAGE):latest) .
 
 # dist-* are the underlying upload rules. They build the artifact via
 # their prerequisite (release-linux-* cross build or DMG-notarize) and

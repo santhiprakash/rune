@@ -57,6 +57,8 @@ type stubHeadlessClient struct {
 	calls          int
 	logouts        int
 	logoutErr      error
+	checkErr       error
+	checks         int
 }
 
 func (s *stubHeadlessClient) AccountStatus(
@@ -72,6 +74,11 @@ func (s *stubHeadlessClient) AccountStatus(
 func (s *stubHeadlessClient) Logout(context.Context) error {
 	s.logouts++
 	return s.logoutErr
+}
+
+func (s *stubHeadlessClient) CheckSignIn(context.Context) error {
+	s.checks++
+	return s.checkErr
 }
 
 func (s *stubHeadlessClient) LoginWithDeviceCode(
@@ -113,6 +120,35 @@ func TestHeadlessLogin(t *testing.T) {
 			},
 			contains: []string{"Signed in as a@rune.test (Rune Pro)"},
 			absent:   []string{"enter the code"},
+		},
+		{
+			name: "a revoked sign-in is replaced",
+			client: &stubHeadlessClient{
+				user:      auth.RPCUser{Email: "a@rune.test", ServeOnly: true},
+				signedIn:  true,
+				checkErr:  auth.ErrNotAuthenticated,
+				prompt:    prompt,
+				loginUser: auth.RPCUser{Email: "a@rune.test", ServeOnly: true},
+				loginOK:   true,
+			},
+			contains: []string{
+				"revoked or has expired",
+				"enter the code ABCD-EFGH",
+				"Signed in as a@rune.test (Rune)",
+			},
+		},
+		{
+			// The sign-in may well be fine: only the server can say,
+			// so it is not thrown away for a server that cannot answer.
+			name: "a sign-in that cannot be checked is an error",
+			client: &stubHeadlessClient{
+				user:     auth.RPCUser{Email: "a@rune.test", ServeOnly: true},
+				signedIn: true,
+				checkErr: errors.New("connection refused"),
+				prompt:   prompt,
+			},
+			wantErr: "connection refused",
+			absent:  []string{"enter the code", "Signed in"},
 		},
 		{
 			name: "a full-access sign-in is discarded and replaced",
@@ -268,6 +304,43 @@ func TestHeadlessLoginReplacesFullAccessToken(t *testing.T) {
 		oauth.clientIDs(), "device authorization and token grant")
 }
 
+// TestHeadlessLoginReplacesRevokedToken pins that a headless node whose
+// sign-in was revoked, or has expired, signs in again by code at
+// startup instead of announcing an account it can no longer act for.
+func TestHeadlessLoginReplacesRevokedToken(t *testing.T) {
+	oauth := newHeadlessOAuthServer(t)
+	storage := storagestub.NewInMemoryService()
+	require.NoError(t, storageapi.WithPartition(storage, "auth").Set(
+		t.Context(), "tokenv2", struct {
+			AccessToken  string
+			TokenType    string
+			RefreshToken string
+			Expiry       time.Time
+		}{
+			AccessToken: accountJWT(t, auth.RPCUser{
+				Email: "node@rune.test", ServeOnly: true}),
+			TokenType:    "Bearer",
+			RefreshToken: revokedRefreshToken,
+			Expiry:       time.Now().Add(-time.Hour),
+		}))
+
+	cfg := apiclient.DefaultConfig()
+	cfg.HTTPEndpointAddress = oauth.URL
+	cfg.Headless = true
+	client := apiclient.New(storage, cfg, t.TempDir())
+	defer client.Close()
+
+	var out bytes.Buffer
+	require.NoError(t, headlessLogin(t.Context(), client, &out))
+	assert.Contains(t, out.String(), "revoked or has expired")
+	assert.Contains(t, out.String(), "enter the code ABCD-EFGH")
+
+	tok := client.CachedTokenSource().Cached(t.Context())
+	require.NotNil(t, tok)
+	assert.True(t, tok.Valid())
+	assert.Equal(t, "headless-refresh-token", tok.RefreshToken)
+}
+
 type headlessOAuthServer struct {
 	*httptest.Server
 	mu  sync.Mutex
@@ -280,9 +353,13 @@ func (s *headlessOAuthServer) clientIDs() []string {
 	return append([]string(nil), s.ids...)
 }
 
+// revokedRefreshToken is refused by newHeadlessOAuthServer.
+const revokedRefreshToken = "revoked-refresh-token"
+
 // newHeadlessOAuthServer stands in for the API server's oauth2 surface:
 // it advertises a headless client and, like the API server, marks only
-// the tokens obtained through it serve-only.
+// the tokens obtained through it serve-only. It refuses
+// revokedRefreshToken with the provider error the API server relays.
 func newHeadlessOAuthServer(t *testing.T) *headlessOAuthServer {
 	t.Helper()
 	s := &headlessOAuthServer{}
@@ -321,6 +398,12 @@ func newHeadlessOAuthServer(t *testing.T) *headlessOAuthServer {
 			Email: "node@rune.test", ServeOnly: record(r) == "test-headless-client",
 		}
 		w.Header().Set("Content-Type", "application/json")
+		if r.Form.Get("refresh_token") == revokedRefreshToken {
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"error":"invalid_grant",` +
+				`"error_description":"Unknown or invalid refresh token."}`))
+			return
+		}
 		require.NoError(t, json.NewEncoder(w).Encode(map[string]any{
 			"access_token":  accountJWT(t, user),
 			"token_type":    "Bearer",

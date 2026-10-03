@@ -335,6 +335,18 @@ func (a *Client) signIn(ctx context.Context) error {
 	return err
 }
 
+// CheckSignIn confirms the cached sign-in with the account server by
+// refreshing it once its access token has expired; an access token
+// that has not expired yet is trusted as is. It returns
+// auth.ErrNotAuthenticated when there is no sign-in, or when the server
+// refused the refresh because the sign-in was revoked or has expired,
+// in which case the sign-in has been discarded. Any other error leaves
+// it in place. It never starts an interactive sign-in.
+func (a *Client) CheckSignIn(ctx context.Context) error {
+	_, err := a.tokenSource.TokenCtx(ctx)
+	return err
+}
+
 // AccountStatus returns the authenticated user's account details parsed
 // from the cached access token. It returns ok=false when no token is
 // cached (the user is not signed in) and an error only when a cached

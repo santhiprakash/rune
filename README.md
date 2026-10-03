@@ -66,14 +66,8 @@ docker run -d --name rune \
 $ docker logs -f rune  # prints the sign-in code
 ```
 
-Or run directly with:
-
-```bash
-rune --headless
-```
-
 `--hostname` is the name the node joins the network under, so from any of your machines
-`workspaceopen rune://buildbox/home/rune/projects` opens the mounted projects.
+`workspaceopen rune://devpod/home/rune/projects` opens the mounted projects.
 
 The [headless guide](https://docs.rune.build/learn/headless) covers running the node as a
 service under systemd, launchd, OpenRC, or runit, and adding toolchains to the Docker image.
