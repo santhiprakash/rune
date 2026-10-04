@@ -12553,6 +12553,22 @@ func TestHandleMouseWindowCoordinates(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, "bravo ", sel)
 	})
+
+	t.Run("triple-click selects the line in visual line mode", func(t *testing.T) {
+		v := newVi()
+		v.Handle(mouseEventAt(term.MouseLeft, 7, 0))
+		v.Handle(mouseEventAt(term.MouseRelease, 7, 0))
+		v.Handle(mouseEventAt(term.MouseLeft, 7, 0))
+		v.Handle(mouseEventAt(term.MouseRelease, 7, 0))
+		v.Handle(mouseEventAt(term.MouseLeft, 7, 0))
+		v.Handle(mouseEventAt(term.MouseRelease, 7, 0))
+
+		assert.Equal(t, visualLineMode, v.handler.mode())
+		sel, ok := v.Selection()
+		require.True(t, ok)
+		// Line selections carry a trailing newline.
+		assert.Equal(t, "alpha bravo charlie\n", sel)
+	})
 }
 
 func mouseEventAt(key term.Key, x, y int) term.Event {
