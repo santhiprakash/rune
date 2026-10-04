@@ -25,8 +25,12 @@ import (
 // wraps text.CursorDelegate to set vi states
 type mouseDelegate struct {
 	mouse.Delegate
-	vi          *viHandlerImpl
-	drag        dragState
+	vi   *viHandlerImpl
+	drag dragState
+	// pressedCell is in window coordinates. It stays comparable for the
+	// whole gesture because the SDK auto-scrolls a drag only once the
+	// pointer reaches a different row from the press — which has already
+	// ended dragPressed — and wheel events reset drag through OnAction.
 	pressedCell term.Coordinates
 }
 
@@ -56,6 +60,11 @@ func (d *mouseDelegate) OnAction(
 	// The SDK reports held-button moves without an action, so any action
 	// ends the previous left-button gesture.
 	d.drag = dragIdle
+	// SelectLine only learns the row of a press, so the cell is captured
+	// here for it to re-arm the gesture.
+	if action == mouse.LeftClick {
+		d.pressedCell = pos
+	}
 	return d.Delegate.OnAction(ev, pos, action)
 }
 
@@ -69,11 +78,9 @@ func (d *mouseDelegate) SetSelectionStart(pos term.Coordinates) {
 		d.vi.anchor = d.vi.cursorAtScroll()
 		return
 	}
-	// A click only repositions the caret; visual mode starts once the
-	// drag leaves the pressed cell, in SetSelectionEnd.
-	if _, ok := d.vi.cursor.SelectionMode(); ok {
-		d.vi.cursor.Unselect()
-	}
+	// The SDK cleared any selection before this call, so a click only
+	// repositions the caret; visual mode starts once the drag leaves
+	// the pressed cell, in SetSelectionEnd.
 	d.vi.cursor.MoveToScroll(d.vi.cursor.ScrollCoordinates(pos))
 	d.vi.anchor = d.vi.cursorAtScroll()
 	d.vi.markMatchingBrace()
@@ -105,6 +112,10 @@ func (d *mouseDelegate) SelectWordAt(pos term.Coordinates) {
 	d.pressedCell = pos
 	d.Delegate.SelectWordAt(pos)
 	if _, ok := d.vi.cursor.SelectionMode(); ok {
+		// Scroll.WordAt's end is one cell past the word and visual mode
+		// includes the cell under the cursor, so land on the last
+		// character of the word.
+		d.vi.cursor.MoveLeft()
 		d.vi.setVisualMode()
 		d.vi.anchor = d.vi.cursorAtScroll()
 		d.vi.markMatchingBrace()
@@ -112,8 +123,11 @@ func (d *mouseDelegate) SelectWordAt(pos term.Coordinates) {
 }
 
 // SelectLine is reached on a triple-click, which vim answers with a
-// linewise visual selection.
+// linewise visual selection. The gesture stays armed on the pressed cell
+// captured by OnAction so jitter does not drift the cursor inside the
+// line.
 func (d *mouseDelegate) SelectLine(y int) {
+	d.drag = dragPressed
 	d.Delegate.SelectLine(y)
 	if _, ok := d.vi.cursor.SelectionMode(); ok {
 		d.vi.setVisualLineMode()

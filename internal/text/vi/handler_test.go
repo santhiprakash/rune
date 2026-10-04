@@ -12537,7 +12537,43 @@ func TestHandleMouseWindowCoordinates(t *testing.T) {
 		assert.Equal(t, visualMode, v.handler.mode())
 		sel, ok := v.Selection()
 		require.True(t, ok)
-		assert.Equal(t, "bravo ", sel)
+		assert.Equal(t, "bravo", sel)
+		assert.Equal(t, term.Coordinates{X: 10}, v.CursorAtScroll(),
+			"the cursor rests on the word's last character")
+	})
+
+	t.Run("double-click selects the last word of a line", func(t *testing.T) {
+		v := newVi()
+		v.Resize(20, 1)
+		v.Handle(mouseEventAt(term.MouseLeft, 15, 0))
+		v.Handle(mouseEventAt(term.MouseRelease, 15, 0))
+		v.Handle(mouseEventAt(term.MouseLeft, 15, 0))
+		v.Handle(mouseEventAt(term.MouseRelease, 15, 0))
+
+		assert.Equal(t, visualMode, v.handler.mode())
+		sel, ok := v.Selection()
+		require.True(t, ok)
+		assert.Equal(t, "charlie", sel)
+		assert.Equal(t, term.Coordinates{X: 18}, v.CursorAtScroll())
+	})
+
+	t.Run("double-click then yank copies the word", func(t *testing.T) {
+		clip := new(mockClip)
+		buf := cell.NewBuffer()
+		buf.ReadFrom(strings.NewReader("alpha bravo charlie"))
+		v := NewWithIndent(buf, workspaceapi.RandomURI("memory"),
+			text.IndentRuneTab, 0,
+			WithWrap(false), WithClipboard(registerset.New(clip)))
+		v.Resize(20, 1)
+
+		v.Handle(mouseEventAt(term.MouseLeft, 7, 0))
+		v.Handle(mouseEventAt(term.MouseRelease, 7, 0))
+		v.Handle(mouseEventAt(term.MouseLeft, 7, 0))
+		v.Handle(mouseEventAt(term.MouseRelease, 7, 0))
+		v.Handle(term.Event{Type: term.EventKey, Ch: 'y'})
+
+		assert.Equal(t, normalMode, v.handler.mode())
+		assert.Equal(t, "bravo", clip.data.Text)
 	})
 
 	t.Run("jitter after double-click keeps the word selected", func(t *testing.T) {
@@ -12551,7 +12587,7 @@ func TestHandleMouseWindowCoordinates(t *testing.T) {
 		assert.Equal(t, visualMode, v.handler.mode())
 		sel, ok := v.Selection()
 		require.True(t, ok)
-		assert.Equal(t, "bravo ", sel)
+		assert.Equal(t, "bravo", sel)
 	})
 
 	t.Run("triple-click selects the line in visual line mode", func(t *testing.T) {
@@ -12567,6 +12603,43 @@ func TestHandleMouseWindowCoordinates(t *testing.T) {
 		sel, ok := v.Selection()
 		require.True(t, ok)
 		// Line selections carry a trailing newline.
+		assert.Equal(t, "alpha bravo charlie\n", sel)
+	})
+
+	t.Run("held move inside the pressed cell after triple-click keeps the cursor", func(t *testing.T) {
+		v := newVi()
+		v.Resize(20, 1)
+		v.Handle(mouseEventAt(term.MouseLeft, 7, 0))
+		v.Handle(mouseEventAt(term.MouseRelease, 7, 0))
+		v.Handle(mouseEventAt(term.MouseLeft, 7, 0))
+		v.Handle(mouseEventAt(term.MouseRelease, 7, 0))
+		v.Handle(mouseEventAt(term.MouseLeft, 7, 0))
+		v.Handle(mouseEventAt(term.MouseLeft, 7, 0))
+		v.Handle(mouseEventAt(term.MouseRelease, 7, 0))
+
+		assert.Equal(t, visualLineMode, v.handler.mode())
+		assert.Equal(t, term.Coordinates{X: 0}, v.CursorAtScroll(),
+			"jitter inside the pressed cell must not drift the cursor")
+		sel, ok := v.Selection()
+		require.True(t, ok)
+		assert.Equal(t, "alpha bravo charlie\n", sel)
+	})
+
+	t.Run("held move to another cell after triple-click follows the pointer", func(t *testing.T) {
+		v := newVi()
+		v.Resize(20, 1)
+		v.Handle(mouseEventAt(term.MouseLeft, 7, 0))
+		v.Handle(mouseEventAt(term.MouseRelease, 7, 0))
+		v.Handle(mouseEventAt(term.MouseLeft, 7, 0))
+		v.Handle(mouseEventAt(term.MouseRelease, 7, 0))
+		v.Handle(mouseEventAt(term.MouseLeft, 7, 0))
+		v.Handle(mouseEventAt(term.MouseLeft, 8, 0))
+		v.Handle(mouseEventAt(term.MouseRelease, 8, 0))
+
+		assert.Equal(t, visualLineMode, v.handler.mode())
+		assert.Equal(t, term.Coordinates{X: 8}, v.CursorAtScroll())
+		sel, ok := v.Selection()
+		require.True(t, ok)
 		assert.Equal(t, "alpha bravo charlie\n", sel)
 	})
 }
