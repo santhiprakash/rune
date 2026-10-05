@@ -150,7 +150,7 @@ func TestPixelSizeCovered(t *testing.T) {
 		},
 		{
 			name: "moved outside its clip covers nothing", size: size,
-			img:  withClip(withOffset(box, 0, 60), image.Rect(0, 0, 16, 5)),
+			img: withClip(withOffset(box, 0, 60), image.Rect(0, 0, 16, 5)),
 		},
 		{
 			name: "moved onto its clip from cells outside it", size: size,
