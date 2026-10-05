@@ -70,7 +70,6 @@ func (d *mouseDelegate) OnAction(
 
 func (d *mouseDelegate) SetSelectionStart(pos term.Coordinates) {
 	d.drag = dragPressed
-	d.pressedCell = pos
 	if d.vi.mode() == insertMode {
 		// vim's mouse=a: reposition and stay in insert. The anchor
 		// must follow because insert-mode arrows snap back to it.
@@ -109,7 +108,14 @@ func (d *mouseDelegate) SetSelectionEnd(pos term.Coordinates) {
 // stays armed so jitter inside the pressed cell keeps the word.
 func (d *mouseDelegate) SelectWordAt(pos term.Coordinates) {
 	d.drag = dragPressed
-	d.pressedCell = pos
+	// The SDK does not clear the selection before SelectWordAt, so a
+	// live selection here is left over from an earlier gesture and the
+	// cursor must not be adjusted unless this click selects a word.
+	if _, _, word := d.vi.less.Scroll().WordAt(
+		d.vi.cursor.ScrollCoordinates(pos),
+	); word == "" {
+		return
+	}
 	d.Delegate.SelectWordAt(pos)
 	if _, ok := d.vi.cursor.SelectionMode(); ok {
 		// Scroll.WordAt's end is one cell past the word and visual mode

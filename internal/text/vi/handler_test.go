@@ -12529,6 +12529,23 @@ func TestHandleMouseWindowCoordinates(t *testing.T) {
 		assert.Equal(t, term.Coordinates{X: 18}, v.CursorAtScroll())
 	})
 
+	t.Run("double-click on a non-word keeps the drag selection", func(t *testing.T) {
+		v := newVi()
+		drag(v, 0, 3)
+
+		sel, ok := v.Selection()
+		require.True(t, ok)
+		require.Equal(t, "alph", sel)
+
+		v.Handle(mouseEventAt(term.MouseLeft, 5, 0))
+		v.Handle(mouseEventAt(term.MouseRelease, 5, 0))
+
+		assert.Equal(t, term.Coordinates{X: 3}, v.CursorAtScroll())
+		sel, ok = v.Selection()
+		require.True(t, ok)
+		assert.Equal(t, "alph", sel)
+	})
+
 	t.Run("double-click then yank copies the word", func(t *testing.T) {
 		clip := new(mockClip)
 		buf := cell.NewBuffer()
