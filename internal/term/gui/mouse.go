@@ -23,6 +23,7 @@ import (
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/unstablebuild/rune-go-sdk/term"
+	"unstable.build/rune/internal/debug"
 	tterm "unstable.build/rune/internal/term"
 	"unstable.build/rune/internal/term/gui/font"
 )
@@ -34,19 +35,42 @@ type mouseState struct {
 	x, y   int
 }
 
+// repeatTimer is the armed drag repeat's pending wake: it fires once
+// after its delay. *time.Timer implements it; tests substitute a manual
+// one driven by the fake clock.
+type repeatTimer interface {
+	Stop() bool
+}
+
 type mouse struct {
 	fontManager *font.Manager
 	mouse       mouseManager
 	now         func() time.Time // for testing
+	// scheduleFrame wakes the run loop; the loop blocks in WaitEvents
+	// between inputs, so an armed repeat's own timer is what makes its
+	// frame run. newTimer is time.AfterFunc, replaced in tests.
+	scheduleFrame func()
+	newTimer      func(time.Duration, func()) repeatTimer
 
 	state         mouseState
 	width, height int
+
+	// pressCell is the cell the current left-button hold began in.
+	// Repeats run only once the pointer has left it, so an ordinary
+	// click held a beat too long never reads as a drag.
+	pressCell term.Coordinates
 
 	// lastButtonAt is when the pipeline last emitted a button event. A
 	// held, motionless drag produces no state change to dispatch on, so
 	// its age past the repeat delay is what keeps edge auto-scroll
 	// advancing while the pointer stays still.
 	lastButtonAt time.Time
+
+	// repeatTimer/repeatAt are the armed repeat's pending wake and the
+	// deadline it was set for, so a frame that wakes early for other
+	// input leaves it standing instead of restarting the interval.
+	repeatTimer repeatTimer
+	repeatAt    time.Time
 
 	// accumY is the accumulated fractional vertical wheel offset. Ebiten
 	// reports wheel deltas in (possibly fractional) line units; high-resolution
@@ -75,12 +99,16 @@ const defaultScrollMultiplier = 3
 // avoids a makeslice panic without affecting normal scrolling.
 const maxWheelLinesPerFrame = 1024
 
-func newMouse(fontManager *font.Manager) *mouse {
+func newMouse(fontManager *font.Manager, scheduleFrame func()) *mouse {
 	return &mouse{
-		fontManager: fontManager,
-		mouse:       ebitenInputManager{},
-		now:         time.Now,
-		multiplier:  defaultScrollMultiplier,
+		fontManager:   fontManager,
+		mouse:         ebitenInputManager{},
+		now:           time.Now,
+		scheduleFrame: scheduleFrame,
+		multiplier:    defaultScrollMultiplier,
+		newTimer: func(d time.Duration, f func()) repeatTimer {
+			return time.AfterFunc(d, f)
+		},
 	}
 }
 
@@ -96,8 +124,13 @@ func (m *mouse) processMouse() []term.Event {
 	m.state.x, m.state.y = m.mouse.CursorPosition()
 	_, wheelY := m.mouse.Wheel()
 
+	if !state.left && m.state.left {
+		m.pressCell = m.calculateCoordinates()
+	}
+	defer m.syncRepeatTimer()
+
 	if m.state == state && wheelY == 0 {
-		return m.dragRepeatEvents()
+		return m.dragRepeatEvent()
 	}
 
 	pos := m.clampedCoordinates()
@@ -133,66 +166,91 @@ func (m *mouse) processMouse() []term.Event {
 	return []term.Event{ev}
 }
 
-// dragRepeatInterval is the base cadence for held-button events a
-// motionless drag synthesizes. Downstream auto-scroll only advances on
-// events, so a pointer held still at a pane's edge stops scrolling the
-// moment it stops moving; twenty repeats per second keeps it moving
-// without flooding the dispatch pipeline.
-const dragRepeatInterval = 50 * time.Millisecond
+// baseDragRepeatInterval is the cadence a held, motionless drag repeats
+// at. Downstream auto-scroll only advances on events, so a pointer held
+// still at a pane's edge stops scrolling the moment it stops moving;
+// twenty repeats per second keeps it moving without flooding the
+// dispatch pipeline.
+const baseDragRepeatInterval = 50 * time.Millisecond
 
 // maxDragOvershoot caps the pointer's overshoot past the window edge, in
 // cells, that shortens the repeat cadence. Bounding it keeps the repeat
 // rate finite no matter how far out the pointer is held.
 const maxDragOvershoot = 8
 
-// maxDragRepeatEvents bounds how many held-button events one frame can
-// emit, the same bound the wheel path puts on pathological deltas: a
-// long stall must not become an unbounded burst on the next frame.
-const maxDragRepeatEvents = 16
+// repeatWanted reports whether the held-drag repeat is armed. Only the
+// left button repeats — it is the one button whose consumers were
+// audited for held-state handling — and only once the pointer has left
+// the cell it was pressed in, so a plain click held a beat never reads
+// as a drag. Both cells are unclamped: a press on the last row dragged
+// below the window still counts as having left.
+func (m *mouse) repeatWanted() bool {
+	return m.state.left && m.calculateCoordinates() != m.pressCell
+}
 
-// dragRepeatEvents synthesizes the held-button events a motionless drag
-// still needs. The window clamp, and the window manager's drag clamp
-// downstream, erase how far past a pane's edge the pointer is, but the
-// overshoot past the window itself is still known here, so the repeat
-// cadence is where that lost distance still reaches: holding further
-// out scrolls faster, the pacing other toolkits give edge auto-scroll.
-func (m *mouse) dragRepeatEvents() []term.Event {
-	var key term.Key
-	switch {
-	case m.state.left:
-		key = term.MouseLeft
-	case m.state.right:
-		key = term.MouseRight
-	case m.state.middle:
-		key = term.MouseMiddle
-	default:
+// dragRepeatEvent synthesizes the held-button event a motionless drag
+// is owed. At most one repeat is emitted per call: paying back every
+// interval a stall missed is what turns the next wake into a jump of
+// many lines, so a stall simply resumes the cadence.
+func (m *mouse) dragRepeatEvent() []term.Event {
+	if !m.repeatWanted() || m.now().Sub(m.lastButtonAt) < m.dragRepeatInterval() {
 		return nil
-	}
-	owed := int(m.now().Sub(m.lastButtonAt) / m.dragRepeatInterval())
-	if owed < 1 {
-		return nil
-	}
-	if owed > maxDragRepeatEvents {
-		owed = maxDragRepeatEvents
 	}
 	m.lastButtonAt = m.now()
 
 	pos := m.clampedCoordinates()
 	ctx := tterm.ContextWithSubCellFraction(context.Background(), m.subCellFraction(pos))
-	events := make([]term.Event, owed)
-	for i := range events {
-		events[i] = term.Event{
-			Type: term.EventMouse, Key: key,
-			MouseX: pos.X, MouseY: pos.Y, Context: ctx,
-		}
+	return []term.Event{{
+		Type: term.EventMouse, Key: term.MouseLeft,
+		MouseX: pos.X, MouseY: pos.Y, Context: ctx,
+	}}
+}
+
+// syncRepeatTimer reconciles the armed repeat's pending wake with its
+// deadline. The run loop sleeps between inputs, so the repeat cadence
+// only exists if the drag schedules its own frames: the timer fires
+// scheduleFrame, and the frame it wakes emits the repeat and re-arms.
+// It runs only while repeatWanted — release and a return to the press
+// cell both stand it down.
+func (m *mouse) syncRepeatTimer() {
+	if !m.repeatWanted() {
+		m.stopRepeatTimer()
+		return
 	}
-	return events
+	deadline := m.lastButtonAt.Add(m.dragRepeatInterval())
+	if m.repeatTimer != nil && m.repeatAt.Equal(deadline) {
+		return
+	}
+	m.stopRepeatTimer()
+	wait := deadline.Sub(m.now())
+	if wait < 0 {
+		wait = 0
+	}
+	m.repeatAt = deadline
+	m.repeatTimer = m.newTimer(wait, m.onRepeatTimer)
+}
+
+// onRepeatTimer is the armed repeat's wake: it asks the run loop for
+// the frame the repeat is emitted on. It runs on the timer's own
+// goroutine, so scheduleFrame must be safe to call off the Update
+// thread — ebiten.ScheduleFrame is.
+func (m *mouse) onRepeatTimer() {
+	debug.CapturePanicReport(m.scheduleFrame)
+}
+
+// stopRepeatTimer disarms the repeat wake. Called on release and in
+// Close, both on the Update thread.
+func (m *mouse) stopRepeatTimer() {
+	if m.repeatTimer != nil {
+		m.repeatTimer.Stop()
+		m.repeatTimer = nil
+	}
 }
 
 // dragRepeatInterval returns the repeat cadence for a motionless drag,
 // shortened by how far past the window's edge the pointer is held.
 func (m *mouse) dragRepeatInterval() time.Duration {
-	return dragRepeatInterval / time.Duration(min(m.dragOvershoot(), maxDragOvershoot)+1)
+	return baseDragRepeatInterval / time.Duration(min(m.dragOvershoot(), maxDragOvershoot)+1)
 }
 
 // dragOvershoot reports how many cells past the window's edge the
