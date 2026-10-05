@@ -20,10 +20,12 @@ import (
 	"image"
 	"math"
 	"testing"
+	"time"
 
 	ebiten "github.com/hajimehoshi/ebiten/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	sdkmouse "github.com/unstablebuild/rune-go-sdk/mouse"
 	"github.com/unstablebuild/rune-go-sdk/term"
 	tterm "unstable.build/rune/internal/term"
 	"unstable.build/rune/internal/term/gui/font"
@@ -726,5 +728,149 @@ func TestWithScrollMultiplierIgnoresNonPositive(t *testing.T) {
 			require.NoError(t, WithScrollMultiplier(test.value)(g))
 			assert.Equal(t, test.want, mouse.multiplier)
 		})
+	}
+}
+
+func TestProcessMouseHeldDragSynthesizesRepeats(t *testing.T) {
+	mock, mouse := newTestMouse(t)
+	now := time.Now()
+	mouse.now = func() time.Time { return now }
+
+	mock.pressedButtons[ebiten.MouseButtonLeft] = struct{}{}
+	mock.cursorPosition = image.Point{X: 40, Y: 40}
+	press := mouse.processMouse()
+	require.Len(t, press, 1)
+	require.Equal(t, term.MouseLeft, press[0].Key)
+
+	// A held, motionless drag goes quiet only until the repeat delay
+	// elapses; then the held button keeps producing events so edge
+	// auto-scroll keeps advancing without any pointer motion.
+	assert.Empty(t, mouse.processMouse())
+	now = now.Add(dragRepeatInterval - time.Millisecond)
+	assert.Empty(t, mouse.processMouse())
+	now = now.Add(2 * time.Millisecond)
+	repeat := mouse.processMouse()
+	require.Len(t, repeat, 1, "a held, motionless drag must keep producing events")
+	assert.Equal(t, term.MouseLeft, repeat[0].Key)
+	assert.Equal(t, press[0].MouseX, repeat[0].MouseX)
+	assert.Equal(t, press[0].MouseY, repeat[0].MouseY)
+	_, ok := tterm.SubCellFractionFromContext(repeat[0].Context)
+	assert.True(t, ok, "repeats carry the same sub-cell payload as motion events")
+
+	now = now.Add(dragRepeatInterval)
+	require.Len(t, mouse.processMouse(), 1, "repeats continue while the button stays held")
+
+	// Releasing ends the stream; stillness with no button stays silent.
+	delete(mock.pressedButtons, ebiten.MouseButtonLeft)
+	require.Len(t, mouse.processMouse(), 1, "release event")
+	now = now.Add(time.Hour)
+	assert.Empty(t, mouse.processMouse())
+}
+
+func TestProcessMouseStillFrameWithoutButtonStaysSilent(t *testing.T) {
+	mock, mouse := newTestMouse(t)
+	now := time.Now()
+	mouse.now = func() time.Time { return now }
+
+	mock.cursorPosition = image.Point{X: 40, Y: 40}
+	require.Len(t, mouse.processMouse(), 1, "first move dispatches")
+	assert.Empty(t, mouse.processMouse(), "identical follow-up frame does not dispatch")
+
+	// The repeat source only exists for drags: however much time passes,
+	// a still frame with no held button must keep producing nothing.
+	now = now.Add(time.Hour)
+	assert.Empty(t, mouse.processMouse())
+}
+
+func TestProcessMouseHeldDragRepeatSpeedsUpPastWindowEdge(t *testing.T) {
+	mock, mouse := newTestMouse(t)
+	now := time.Now()
+	mouse.now = func() time.Time { return now }
+
+	mock.pressedButtons[ebiten.MouseButtonLeft] = struct{}{}
+	mock.cursorPosition = image.Point{X: 40, Y: 40}
+	require.Len(t, mouse.processMouse(), 1)
+
+	// One interval of stillness inside the window is a single repeat.
+	now = now.Add(dragRepeatInterval)
+	require.Len(t, mouse.processMouse(), 1)
+
+	// Dragging far below the window clamps the reported cell to the
+	// bottom edge but must not clamp away how far out the pointer is:
+	// the same stillness window now owes more repeats, so the scroll
+	// speed tracks the distance past the edge.
+	mock.cursorPosition = image.Point{X: 40, Y: defaultHeight * 4}
+	require.Len(t, mouse.processMouse(), 1)
+	now = now.Add(dragRepeatInterval)
+	repeats := mouse.processMouse()
+	require.Greater(t, len(repeats), 1)
+	for _, ev := range repeats {
+		assert.Equal(t, term.MouseLeft, ev.Key)
+	}
+}
+
+// recordingMouseDelegate implements the SDK's mouse.Delegate for the
+// held-drag integration test: it counts scrolled lines and records the
+// selection endpoints it was asked to extend to.
+type recordingMouseDelegate struct {
+	height  int
+	scrolls int
+	ends    []term.Coordinates
+}
+
+func (d *recordingMouseDelegate) OnAction(term.Event, term.Coordinates, sdkmouse.Action) bool {
+	return false
+}
+
+func (d *recordingMouseDelegate) ScrollUp(n int) bool   { d.scrolls += n; return true }
+func (d *recordingMouseDelegate) ScrollDown(n int) bool { d.scrolls += n; return true }
+func (d *recordingMouseDelegate) SetSelectionEnd(pos term.Coordinates) {
+	d.ends = append(d.ends, pos)
+}
+func (d *recordingMouseDelegate) SetSelectionStart(term.Coordinates) {}
+func (d *recordingMouseDelegate) ClearSelection()                    {}
+func (d *recordingMouseDelegate) SelectWordAt(term.Coordinates)      {}
+func (d *recordingMouseDelegate) SelectLine(int)                     {}
+func (d *recordingMouseDelegate) Width() int                         { return 40 }
+func (d *recordingMouseDelegate) Height() int                        { return d.height }
+
+func TestHeldDragKeepsScrollingAtPaneEdge(t *testing.T) {
+	mock, mouse := newTestMouse(t)
+	now := time.Now()
+	mouse.now = func() time.Time { return now }
+
+	delegate := &recordingMouseDelegate{height: mouse.height}
+	dispatch := sdkmouse.New(delegate)
+	pipe := func() {
+		for _, ev := range mouse.processMouse() {
+			dispatch.Handle(ev)
+		}
+	}
+
+	// Press mid-pane, then drag to the clamped bottom edge: the motion
+	// alone scrolls once through the SDK's edge zone.
+	mock.pressedButtons[ebiten.MouseButtonLeft] = struct{}{}
+	mock.cursorPosition = image.Point{X: 40, Y: 40}
+	pipe()
+	mock.cursorPosition = image.Point{X: 40, Y: defaultHeight}
+	pipe()
+	require.Positive(t, delegate.scrolls, "the drag itself reaches the edge zone")
+
+	// Holding the pointer still at the edge must keep scrolling: the
+	// synthesized repeats, not new motion, drive the scroll on.
+	before := delegate.scrolls
+	now = now.Add(3 * dragRepeatInterval)
+	pipe()
+	assert.Greater(t, delegate.scrolls, before,
+		"a pointer held still at the edge must keep scrolling")
+	before = delegate.scrolls
+	now = now.Add(3 * dragRepeatInterval)
+	pipe()
+	assert.Greater(t, delegate.scrolls, before,
+		"scrolling continues for as long as the button stays held at the edge")
+
+	for _, end := range delegate.ends {
+		assert.Equal(t, delegate.ends[0], end,
+			"held-still repeats must not drift the selection endpoint")
 	}
 }

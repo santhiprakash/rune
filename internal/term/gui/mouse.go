@@ -19,6 +19,7 @@ package gui
 import (
 	"context"
 	"math"
+	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/unstablebuild/rune-go-sdk/term"
@@ -36,9 +37,16 @@ type mouseState struct {
 type mouse struct {
 	fontManager *font.Manager
 	mouse       mouseManager
+	now         func() time.Time // for testing
 
 	state         mouseState
 	width, height int
+
+	// lastButtonAt is when the pipeline last emitted a button event. A
+	// held, motionless drag produces no state change to dispatch on, so
+	// its age past the repeat delay is what keeps edge auto-scroll
+	// advancing while the pointer stays still.
+	lastButtonAt time.Time
 
 	// accumY is the accumulated fractional vertical wheel offset. Ebiten
 	// reports wheel deltas in (possibly fractional) line units; high-resolution
@@ -71,6 +79,7 @@ func newMouse(fontManager *font.Manager) *mouse {
 	return &mouse{
 		fontManager: fontManager,
 		mouse:       ebitenInputManager{},
+		now:         time.Now,
 		multiplier:  defaultScrollMultiplier,
 	}
 }
@@ -88,7 +97,7 @@ func (m *mouse) processMouse() []term.Event {
 	_, wheelY := m.mouse.Wheel()
 
 	if m.state == state && wheelY == 0 {
-		return nil
+		return m.dragRepeatEvents()
 	}
 
 	pos := m.clampedCoordinates()
@@ -104,33 +113,93 @@ func (m *mouse) processMouse() []term.Event {
 
 	ev := term.Event{Type: term.EventMouse, MouseX: pos.X, MouseY: pos.Y, Context: ctx}
 
-	if m.state.left {
+	switch {
+	case m.state.left:
 		ev.Key = term.MouseLeft
-		return []term.Event{ev}
-	}
-
-	if m.state.right {
+	case m.state.right:
 		ev.Key = term.MouseRight
-		return []term.Event{ev}
-	}
-
-	if m.state.middle {
+	case m.state.middle:
 		ev.Key = term.MouseMiddle
-		return []term.Event{ev}
-	}
-
-	if (state.left && !m.state.left) ||
+	case (state.left && !m.state.left) ||
 		(state.right && !m.state.right) ||
-		(state.middle && !m.state.middle) {
+		(state.middle && !m.state.middle):
 		ev.Key = term.MouseRelease
-		return []term.Event{ev}
+	case m.state.x == state.x && m.state.y == state.y:
+		return nil
 	}
-
-	if m.state.x != state.x || m.state.y != state.y {
-		return []term.Event{ev}
+	if ev.Key != 0 {
+		m.lastButtonAt = m.now()
 	}
+	return []term.Event{ev}
+}
 
-	return nil
+// dragRepeatInterval is the base cadence for held-button events a
+// motionless drag synthesizes. Downstream auto-scroll only advances on
+// events, so a pointer held still at a pane's edge stops scrolling the
+// moment it stops moving; twenty repeats per second keeps it moving
+// without flooding the dispatch pipeline.
+const dragRepeatInterval = 50 * time.Millisecond
+
+// maxDragOvershoot caps the pointer's overshoot past the window edge, in
+// cells, that shortens the repeat cadence. Bounding it keeps the repeat
+// rate finite no matter how far out the pointer is held.
+const maxDragOvershoot = 8
+
+// maxDragRepeatEvents bounds how many held-button events one frame can
+// emit, the same bound the wheel path puts on pathological deltas: a
+// long stall must not become an unbounded burst on the next frame.
+const maxDragRepeatEvents = 16
+
+// dragRepeatEvents synthesizes the held-button events a motionless drag
+// still needs. The window clamp, and the window manager's drag clamp
+// downstream, erase how far past a pane's edge the pointer is, but the
+// overshoot past the window itself is still known here, so the repeat
+// cadence is where that lost distance still reaches: holding further
+// out scrolls faster, the pacing other toolkits give edge auto-scroll.
+func (m *mouse) dragRepeatEvents() []term.Event {
+	var key term.Key
+	switch {
+	case m.state.left:
+		key = term.MouseLeft
+	case m.state.right:
+		key = term.MouseRight
+	case m.state.middle:
+		key = term.MouseMiddle
+	default:
+		return nil
+	}
+	owed := int(m.now().Sub(m.lastButtonAt) / m.dragRepeatInterval())
+	if owed < 1 {
+		return nil
+	}
+	if owed > maxDragRepeatEvents {
+		owed = maxDragRepeatEvents
+	}
+	m.lastButtonAt = m.now()
+
+	pos := m.clampedCoordinates()
+	ctx := tterm.ContextWithSubCellFraction(context.Background(), m.subCellFraction(pos))
+	events := make([]term.Event, owed)
+	for i := range events {
+		events[i] = term.Event{
+			Type: term.EventMouse, Key: key,
+			MouseX: pos.X, MouseY: pos.Y, Context: ctx,
+		}
+	}
+	return events
+}
+
+// dragRepeatInterval returns the repeat cadence for a motionless drag,
+// shortened by how far past the window's edge the pointer is held.
+func (m *mouse) dragRepeatInterval() time.Duration {
+	return dragRepeatInterval / time.Duration(min(m.dragOvershoot(), maxDragOvershoot)+1)
+}
+
+// dragOvershoot reports how many cells past the window's edge the
+// pointer sits, on whichever axis reaches further.
+func (m *mouse) dragOvershoot() int {
+	raw := m.calculateCoordinates()
+	return max(max(-raw.X, raw.X-m.width+1), max(-raw.Y, raw.Y-m.height+1), 0)
 }
 
 // wheelEvents accumulates the fractional wheel delta and returns one discrete
