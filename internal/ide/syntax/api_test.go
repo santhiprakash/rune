@@ -26,14 +26,14 @@ import (
 func TestCaptureNameAttributesSupportsMarkupAndTextCaptures(t *testing.T) {
 	attrs := DefaultConfig().CaptureNamesAttributes
 
-	assert.Equal(t, term.ColorYellow, captureNameAttributes(attrs, "markup.heading").Fg)
-	assert.Equal(t, term.ColorYellow, captureNameAttributes(attrs, "markup.heading.1").Fg)
-	assert.Equal(t, term.ColorFuchsia, captureNameAttributes(attrs, "markup.raw.block").Fg)
-	assert.Equal(t, term.ColorFuchsia, captureNameAttributes(attrs, "markup.link.url").Fg)
-	assert.Equal(t, term.ColorYellow, captureNameAttributes(attrs, "markup.list.checked").Fg)
-	assert.Equal(t, term.ColorBlue, captureNameAttributes(attrs, "markup.quote").Fg)
-	assert.Equal(t, term.ColorYellow, captureNameAttributes(attrs, "text.title").Fg)
-	assert.Equal(t, term.ColorFuchsia, captureNameAttributes(attrs, "text.uri").Fg)
+	assert.Equal(t, term.ColorYellow, CaptureNameAttributes(attrs, "markup.heading").Fg)
+	assert.Equal(t, term.ColorYellow, CaptureNameAttributes(attrs, "markup.heading.1").Fg)
+	assert.Equal(t, term.ColorFuchsia, CaptureNameAttributes(attrs, "markup.raw.block").Fg)
+	assert.Equal(t, term.ColorFuchsia, CaptureNameAttributes(attrs, "markup.link.url").Fg)
+	assert.Equal(t, term.ColorYellow, CaptureNameAttributes(attrs, "markup.list.checked").Fg)
+	assert.Equal(t, term.ColorBlue, CaptureNameAttributes(attrs, "markup.quote").Fg)
+	assert.Equal(t, term.ColorYellow, CaptureNameAttributes(attrs, "text.title").Fg)
+	assert.Equal(t, term.ColorFuchsia, CaptureNameAttributes(attrs, "text.uri").Fg)
 }
 
 func TestCaptureNameAttributesUserConfigOverridesFallback(t *testing.T) {
@@ -41,12 +41,12 @@ func TestCaptureNameAttributesUserConfigOverridesFallback(t *testing.T) {
 	attrs["markup.heading"] = term.Attributes{Fg: term.ColorGreen}
 	attrs["markup.heading.2"] = term.Attributes{Fg: term.ColorRed}
 
-	assert.Equal(t, term.ColorRed, captureNameAttributes(attrs, "markup.heading.2").Fg)
-	assert.Equal(t, term.ColorGreen, captureNameAttributes(attrs, "markup.heading.3").Fg)
+	assert.Equal(t, term.ColorRed, CaptureNameAttributes(attrs, "markup.heading.2").Fg)
+	assert.Equal(t, term.ColorGreen, CaptureNameAttributes(attrs, "markup.heading.3").Fg)
 }
 
 func TestCaptureNameAttributesUnknownCaptureReturnsZeroAttributes(t *testing.T) {
-	assert.Equal(t, term.Attributes{}, captureNameAttributes(nil, "unknown.capture"))
+	assert.Equal(t, term.Attributes{}, CaptureNameAttributes(nil, "unknown.capture"))
 }
 
 func TestCaptureNameAttributesFallsBackToBaseCapture(t *testing.T) {
@@ -64,10 +64,10 @@ func TestCaptureNameAttributesFallsBackToBaseCapture(t *testing.T) {
 		"keyword.import",
 		"keyword.coroutine",
 	} {
-		assert.Equal(t, term.ColorYellow, captureNameAttributes(attrs, name).Fg, name)
+		assert.Equal(t, term.ColorYellow, CaptureNameAttributes(attrs, name).Fg, name)
 	}
 
-	assert.Equal(t, term.ColorFuchsia, captureNameAttributes(attrs, "string.escape").Fg)
-	assert.Equal(t, term.ColorRed, captureNameAttributes(attrs, "number.float").Fg)
-	assert.Equal(t, term.ColorBlue, captureNameAttributes(attrs, "comment.documentation").Fg)
+	assert.Equal(t, term.ColorFuchsia, CaptureNameAttributes(attrs, "string.escape").Fg)
+	assert.Equal(t, term.ColorRed, CaptureNameAttributes(attrs, "number.float").Fg)
+	assert.Equal(t, term.ColorBlue, CaptureNameAttributes(attrs, "comment.documentation").Fg)
 }

@@ -14,13 +14,14 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-package syntax
+package treesitter
 
 import (
 	"testing"
 
 	"github.com/unstablebuild/rune-go-sdk/api/browserapi"
 	"github.com/unstablebuild/rune-go-sdk/term"
+	"unstable.build/rune/internal/ide/syntax"
 )
 
 // notifyReadsState mirrors the real production chain
@@ -67,7 +68,7 @@ func TestNotifyNotAvailRunsOnEventLoop(t *testing.T) {
 	tree := &Tree{
 		n:           notifyReadsState{state: &state},
 		interrupter: term.NopInterrupter(),
-		config: Config{
+		config: syntax.Config{
 			ScheduleNextTick: func(fn func()) bool {
 				ticks <- fn
 				return true

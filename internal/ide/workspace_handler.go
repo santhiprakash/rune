@@ -80,8 +80,8 @@ import (
 	"unstable.build/rune/internal/ide/llmshell"
 	"unstable.build/rune/internal/ide/pkgshell"
 	"unstable.build/rune/internal/ide/pkgtrust"
-	"unstable.build/rune/internal/ide/syntax"
 	"unstable.build/rune/internal/ide/syntax/symboldb"
+	"unstable.build/rune/internal/ide/syntax/treesitter"
 	"unstable.build/rune/internal/ide/vctrl"
 	"unstable.build/rune/internal/ide/vctrl/gogit"
 	"unstable.build/rune/internal/llm/llamaserver"
@@ -759,7 +759,7 @@ func (h *workspaceManagerHandler) init(
 
 	// don't install a fs watcher for the home workspace,
 	// to prevent unecessary resource consumption
-	homeParser := syntax.NewParser(h.homeWorkspace, h.pkgmanager, h.homeURI)
+	homeParser := treesitter.NewParser(h.homeWorkspace, h.pkgmanager, h.homeURI)
 	globalOpts := h.textOpts(cfg, homeParser, h.homeURI, h.homeWorkspace)
 	tm := new(workspaceTabManager)
 	tm.parent = h
@@ -1552,6 +1552,7 @@ func (h *workspaceManagerHandler) textOpts(
 		text.WithPackageManager(h.pkgmanager),
 		text.WithSyntaxConfig(cfg.syntaxConfig()),
 		text.WithMaxSyntaxParseSize(cfg.editorMaxSizeForSyntax()),
+		text.WithSyntaxTree(treesitter.New),
 		text.WithSwapDirectory(h.swapDirectory(cfg, ws, uri)),
 		text.WithMarkdownConfig(markdownConfig),
 		text.WithClipboard(h.clip),
@@ -1897,7 +1898,7 @@ func (h *workspaceManagerHandler) buildWorkspaceAsync(
 		}
 	}
 
-	parser := syntax.NewParser(cwd, h.pkgmanager, uri)
+	parser := treesitter.NewParser(cwd, h.pkgmanager, uri)
 	var wsParser syntaxapi.Parser = parser
 	var symbolDB *symboldb.Parser
 	var symbolDBCloser io.Closer

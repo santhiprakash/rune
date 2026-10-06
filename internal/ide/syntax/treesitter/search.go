@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-package syntax
+package treesitter
 
 import (
 	"bytes"
@@ -41,6 +41,7 @@ import (
 	"unstable.build/rune/internal/debug"
 	"unstable.build/rune/internal/ide/idelsp/languages"
 	"unstable.build/rune/internal/ide/idelsp/symbolresolve"
+	"unstable.build/rune/internal/ide/syntax"
 	"unstable.build/rune/internal/ide/vctrl"
 	"unstable.build/rune/internal/workspace/walkdir"
 )
@@ -50,7 +51,7 @@ import (
 // (Query2, Search2) that are not part of the public syntaxapi.Parser
 // surface.
 func NewParser(
-	w workspaceapi.FileSystem, pkg PkgManager, uri workspaceapi.URI,
+	w workspaceapi.FileSystem, pkg syntax.PkgManager, uri workspaceapi.URI,
 ) Parser {
 	filter := &queryFilter{w: w}
 	return Parser{
@@ -67,7 +68,7 @@ var defaultWorkers = runtime.NumCPU()
 // Parser is the workspace-wide tree-sitter parser and searcher.
 type Parser struct {
 	w     workspaceapi.FileSystem
-	pkg   PkgManager
+	pkg   syntax.PkgManager
 	uri   workspaceapi.URI
 	specs *specCache
 	// filter prunes noise/dependency directories (gitignored entries and
@@ -759,7 +760,7 @@ func readFilePairs(
 }
 
 func readSymbolsWorker(
-	ctx context.Context, fs workspaceapi.FileSystem, pkg PkgManager,
+	ctx context.Context, fs workspaceapi.FileSystem, pkg syntax.PkgManager,
 	uri workspaceapi.URI, queryFile, query string, results chan syntaxapi.Result,
 	files chan string,
 	err *error, expectedErrors map[string]*expectedError,
@@ -1005,7 +1006,7 @@ type parser struct {
 
 func newParser(
 	ctx context.Context, langID string,
-	pkg PkgManager, queryFile, query string,
+	pkg syntax.PkgManager, queryFile, query string,
 ) (ret *parser, err error) {
 	lang, queryText, err := loadLanguage(ctx, langID, pkg, queryFile, query)
 	if err != nil {
@@ -1048,7 +1049,7 @@ func (l *loadedLanguage) close() {
 // it returns the inline query unchanged. The caller owns the returned
 // loadedLanguage and must close it.
 func loadLanguage(
-	ctx context.Context, langID string, pkg PkgManager, queryFile, query string,
+	ctx context.Context, langID string, pkg syntax.PkgManager, queryFile, query string,
 ) (*loadedLanguage, string, error) {
 	it, err := pkg.LibDir(ctx, langID)
 	if err != nil {

@@ -23,7 +23,7 @@ import (
 	"runtime"
 
 	"github.com/unstablebuild/rune-go-sdk/iterator"
-	"unstable.build/rune/internal/ide/syntax"
+	"unstable.build/rune/internal/ide/syntax/treesitter"
 )
 
 // stubPkgManager satisfies both idedebug.PkgManager and
@@ -45,7 +45,7 @@ func (p *stubPkgManager) LibDir(
 		entries, err := os.ReadDir(p.grammar)
 		if err == nil {
 			for _, e := range entries {
-				if e.IsDir() || e.Name() == syntax.ParserFilename {
+				if e.IsDir() || e.Name() == treesitter.ParserFilename {
 					continue
 				}
 				files = append(files, filepath.Join(p.grammar, e.Name()))
@@ -61,7 +61,7 @@ func (p *stubPkgManager) LibDir(
 // GOOS_GOARCH subdirectory.
 func hostParserRel() string {
 	if runtime.GOOS == "darwin" {
-		return syntax.ParserFilename
+		return treesitter.ParserFilename
 	}
-	return filepath.Join(runtime.GOOS+"_"+runtime.GOARCH, syntax.ParserFilename)
+	return filepath.Join(runtime.GOOS+"_"+runtime.GOARCH, treesitter.ParserFilename)
 }

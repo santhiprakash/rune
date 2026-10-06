@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-package syntax
+package treesitter
 
 import (
 	"context"
@@ -33,6 +33,7 @@ import (
 	"unstable.build/rune/internal/debug"
 	"unstable.build/rune/internal/ide/idelsp/languages"
 	"unstable.build/rune/internal/ide/idelsp/symbolresolve"
+	"unstable.build/rune/internal/ide/syntax"
 	"unstable.build/rune/internal/workspace/walkdir"
 )
 
@@ -144,7 +145,7 @@ func (c *compiledQueries) close() {
 }
 
 func readSymbolsWorkerMulti(
-	ctx context.Context, fs workspaceapi.FileSystem, pkg PkgManager,
+	ctx context.Context, fs workspaceapi.FileSystem, pkg syntax.PkgManager,
 	uri workspaceapi.URI, queries []symbolresolve.MultiQuery,
 	results chan symbolresolve.MultiResult, files chan string,
 	err *error, expectedErrors map[string]*expectedError, langs []string,
@@ -227,7 +228,7 @@ type langBatch struct {
 
 type querySession struct {
 	w        workspaceapi.FileSystem
-	pkg      PkgManager
+	pkg      syntax.PkgManager
 	uri      workspaceapi.URI
 	compiled map[string]*langBatch
 	// scratch is the recycled file-content buffer; safe because the
@@ -285,7 +286,7 @@ func sameMultiQuery(a, b symbolresolve.MultiQuery) bool {
 // it, so a worker shares a single parser and language handle across all
 // queries for that language.
 func compileQueriesForLang(
-	ctx context.Context, pkg PkgManager, langID string,
+	ctx context.Context, pkg syntax.PkgManager, langID string,
 	queries []symbolresolve.MultiQuery,
 ) (*compiledQueries, error) {
 	queryFile := ""

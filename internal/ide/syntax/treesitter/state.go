@@ -14,31 +14,21 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-package syntax
+package treesitter
 
 import (
 	"context"
 	"errors"
 
 	"github.com/unstablebuild/blue/iterator"
+	"unstable.build/rune/internal/ide/syntax"
 )
-
-// State represents the state of the syntax tree.
-type State struct {
-	Progress    float64
-	ParserError string
-	LangID      string
-	Closed      bool
-	Highlights  bool
-	Folds       bool
-	Indents     bool
-}
 
 type waitStateIterator struct {
 	ready chan struct{}
 	err   error
 	tree  *Tree
-	iter  iterator.Iterator[State]
+	iter  iterator.Iterator[syntax.State]
 }
 
 func newWaitStateIterator(t *Tree, ch chan struct{}) *waitStateIterator {
@@ -48,13 +38,13 @@ func newWaitStateIterator(t *Tree, ch chan struct{}) *waitStateIterator {
 	}
 }
 
-func (f *waitStateIterator) Next(ctx context.Context) (State, bool) {
+func (f *waitStateIterator) Next(ctx context.Context) (syntax.State, bool) {
 	if f.iter == nil {
 		select {
 		case <-f.ready:
 		case <-ctx.Done():
 			f.err = ctx.Err()
-			return State{}, false
+			return syntax.State{}, false
 		}
 		f.tree.mu.Lock()
 		f.iter = newReadyStateIterator(f.tree)
@@ -88,11 +78,11 @@ func (f *waitStateIterator) Close() error {
 type readyStateIterator struct {
 	t    *Tree
 	err  error
-	next chan State
+	next chan syntax.State
 }
 
-func newReadyStateIterator(t *Tree) iterator.Iterator[State] {
-	ch := make(chan State, 1)
+func newReadyStateIterator(t *Tree) iterator.Iterator[syntax.State] {
+	ch := make(chan syntax.State, 1)
 	t.statesubs[ch] = struct{}{}
 
 	ch <- t.currState
@@ -102,13 +92,13 @@ func newReadyStateIterator(t *Tree) iterator.Iterator[State] {
 	}
 }
 
-func (f *readyStateIterator) Next(ctx context.Context) (State, bool) {
+func (f *readyStateIterator) Next(ctx context.Context) (syntax.State, bool) {
 	select {
 	case state, ok := <-f.next:
 		return state, ok
 	case <-ctx.Done():
 		f.err = ctx.Err()
-		return State{}, false
+		return syntax.State{}, false
 	}
 }
 

@@ -31,7 +31,7 @@ import (
 	"github.com/unstablebuild/rune-go-sdk/api/textapi"
 	"github.com/unstablebuild/rune-go-sdk/api/workspaceapi"
 	"github.com/unstablebuild/rune-go-sdk/iterator"
-	"unstable.build/rune/internal/ide/syntax"
+	"unstable.build/rune/internal/ide/syntax/treesitter"
 	"unstable.build/rune/internal/workspace"
 )
 
@@ -228,7 +228,7 @@ func newGoParser(t *testing.T, grammar, source string) (
 	t.Cleanup(func() { _ = fs.Close() })
 
 	pkg := &stubPkgManager{grammar: grammar}
-	p := syntax.NewParser(fs, pkg, wuri)
+	p := treesitter.NewParser(fs, pkg, wuri)
 
 	uri, err := workspaceapi.ParseURI("file://" + path)
 	require.NoError(t, err)

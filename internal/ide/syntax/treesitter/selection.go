@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-package syntax
+package treesitter
 
 import (
 	tree_sitter "github.com/tree-sitter/go-tree-sitter"

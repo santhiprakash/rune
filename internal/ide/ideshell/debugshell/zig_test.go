@@ -36,7 +36,7 @@ import (
 	"github.com/unstablebuild/rune-go-sdk/iterator"
 	"github.com/unstablebuild/rune-go-sdk/term"
 	"unstable.build/rune/internal/ide/idedebug"
-	"unstable.build/rune/internal/ide/syntax"
+	"unstable.build/rune/internal/ide/syntax/treesitter"
 	"unstable.build/rune/internal/text/texttest"
 	"unstable.build/rune/internal/workspace"
 )
@@ -173,7 +173,7 @@ func newZigE2EHarness(t *testing.T, lldbDapBin, dir string) *e2eHarness {
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = fs.Close() })
-	parser := syntax.NewParser(fs, pkg, uri)
+	parser := treesitter.NewParser(fs, pkg, uri)
 	h := New(mgr, br, ed, parser, fs, Config{
 		WorkspaceURI: uri,
 		Debugger:     dapCfg,

@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-package syntax
+package treesitter
 
 import (
 	"context"
@@ -22,11 +22,12 @@ import (
 	"sync"
 
 	"github.com/unstablebuild/rune-go-sdk/iterator"
+	"unstable.build/rune/internal/ide/syntax"
 	"unstable.build/rune/internal/workspace/walkdir"
 )
 
 type cachingPkgManager struct {
-	pkg   PkgManager
+	pkg   syntax.PkgManager
 	files sync.Map
 }
 
@@ -36,7 +37,7 @@ type cacheablePkgFilesIterator struct {
 	pkgID string
 }
 
-func newCachingPkgManager(pkg PkgManager) *cachingPkgManager {
+func newCachingPkgManager(pkg syntax.PkgManager) *cachingPkgManager {
 	return &cachingPkgManager{pkg: pkg}
 }
 

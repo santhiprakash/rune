@@ -47,6 +47,7 @@ import (
 	"github.com/unstablebuild/rune-go-sdk/api/schemeapi"
 	"github.com/unstablebuild/rune-go-sdk/api/storageapi"
 	"github.com/unstablebuild/rune-go-sdk/api/storageapi/docmarshal/docbson"
+	"github.com/unstablebuild/rune-go-sdk/api/storageapi/storagestub"
 	"github.com/unstablebuild/rune-go-sdk/api/textapi"
 	"github.com/unstablebuild/rune-go-sdk/api/workspaceapi"
 	"github.com/unstablebuild/rune-go-sdk/clipboard"
@@ -9066,6 +9067,21 @@ func TestSwapDirectory(t *testing.T) {
 		require.NoError(t, err)
 		assert.Nil(t, h.swapDirectory(swapDirIDEConfig(t, false), ws, uri))
 	})
+}
+
+func TestTextOptsInstallSyntaxTrees(t *testing.T) {
+	var cfg ideConfig
+	initDefaultConfig(&cfg, browser.NopWallpaper(), term.RingBell, term.ScheduleNextTick, "")
+	cfg.storage = storagestub.NewInMemoryService()
+	uri, err := workspaceapi.ParseURI("file:///Users/x/src/proj")
+	require.NoError(t, err)
+
+	textCfg := text.DefaultConfig()
+	for _, opt := range (&workspaceManagerHandler{}).textOpts(cfg, nil, uri, nil) {
+		opt(&textCfg)
+	}
+	assert.NotNil(t, textCfg.SyntaxTree,
+		"without a syntax tree hook, file tabs lose highlights, folds and indents")
 }
 
 func TestWorkspaceRootURI(t *testing.T) {

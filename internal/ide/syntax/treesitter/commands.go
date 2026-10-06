@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-package syntax
+package treesitter
 
 import (
 	"context"
@@ -27,16 +27,13 @@ import (
 	"github.com/unstablebuild/rune-go-sdk/api/textapi"
 	"github.com/unstablebuild/rune-go-sdk/term"
 	"unstable.build/rune/internal/handler/command"
+	"unstable.build/rune/internal/ide/syntax"
 )
 
-// Handler is a subset of text.Handler.
-type Handler interface {
-	SetCursorAtScroll(term.Coordinates) bool
-}
-
-// Commands returns the file-level commands supported by the given tree.
-func Commands(handler Handler, t *Tree) ([]textapi.CommandManual, CommandHandler) {
-	return commands, CommandHandler{handler: handler, t: t}
+// Commands returns the file-level commands the tree provides for the tab
+// edited by handler.
+func (t *Tree) Commands(handler syntax.Handler) ([]textapi.CommandManual, syntax.CommandHandler) {
+	return commands, commandHandler{handler: handler, t: t}
 }
 
 const (
@@ -60,14 +57,13 @@ var commands = []textapi.CommandManual{
 	},
 }
 
-// CommandHandler satisfies text.CommandHandler.
-type CommandHandler struct {
-	handler Handler
+type commandHandler struct {
+	handler syntax.Handler
 	t       *Tree
 }
 
-// HandleCommand satisfies text.CommandHandler.
-func (c CommandHandler) HandleCommand(ctx context.Context, cmd textapi.Command) (err error) {
+// HandleCommand satisfies syntax.CommandHandler.
+func (c commandHandler) HandleCommand(ctx context.Context, cmd textapi.Command) (err error) {
 	switch cmd.Name {
 	case cmdJumpToSyntax:
 		return c.handleJumpToSyntax(ctx, cmd)
@@ -76,8 +72,8 @@ func (c CommandHandler) HandleCommand(ctx context.Context, cmd textapi.Command) 
 	}
 }
 
-// Complete satisfies text.CommandHandler.
-func (c CommandHandler) Complete(ctx context.Context, cmd textapi.Command) (
+// Complete satisfies syntax.CommandHandler.
+func (c commandHandler) Complete(ctx context.Context, cmd textapi.Command) (
 	iterator.Iterator[string], string, error,
 ) {
 	switch cmd.Name {
@@ -88,7 +84,7 @@ func (c CommandHandler) Complete(ctx context.Context, cmd textapi.Command) (
 	}
 }
 
-func (c CommandHandler) completeJumpToSyntax(ctx context.Context, cmd textapi.Command) (
+func (c commandHandler) completeJumpToSyntax(ctx context.Context, cmd textapi.Command) (
 	iterator.Iterator[string], string, error,
 ) {
 	// complete with pre-loaded files
@@ -147,7 +143,7 @@ func jumpToSyntaxLineString(line string) string {
 	return strings.TrimLeft(line, " \t")
 }
 
-func (c CommandHandler) handleJumpToSyntax(
+func (c commandHandler) handleJumpToSyntax(
 	ctx context.Context, cmd textapi.Command,
 ) (err error) {
 	if len(cmd.Args) < 3 {

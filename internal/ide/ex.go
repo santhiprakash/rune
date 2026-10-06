@@ -1371,7 +1371,7 @@ func (e *ex) reloadfile(_ context.Context, args ...string) error {
 	}
 	// :reloadfile is fire-and-forget: the reload runs on a
 	// background goroutine and a reparse is scheduled back onto
-	// the host event loop via syntax.Tree.wrapReparse. Awaiting
+	// the host event loop via treesitter.Tree.wrapReparse. Awaiting
 	// the result synchronously here would deadlock that reparse
 	// against the host mutex.
 	return e.flusher.reloadAsync(t.URI(), t, nil)

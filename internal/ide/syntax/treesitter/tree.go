@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-package syntax
+package treesitter
 
 import (
 	"bytes"
@@ -43,6 +43,7 @@ import (
 	"unstable.build/rune/internal/cell"
 	"unstable.build/rune/internal/debug"
 	"unstable.build/rune/internal/ide/idelsp/languages"
+	"unstable.build/rune/internal/ide/syntax"
 	"unstable.build/rune/internal/workspace"
 )
 
@@ -64,23 +65,20 @@ const (
 	LocalsFilename = "locals.scm"
 )
 
-// Opener abstract reading files and it's required to open custom query files.
-type Opener interface {
-	OpenFile(path string, flag int, perm os.FileMode) (workspaceapi.File, error)
-}
+var _ syntax.NewTreeFunc = New
 
-// WithTree installs a tree parser into the given buffer via cell.Buffer.WithEditor,
+// New installs a *Tree parser into the given buffer via cell.Buffer.WithView,
 // and wraps the given FlusherCloser to provide re-parse on reload and flush.
 // A cell.Buffer's View method can be used to retrieve this Tree in other contexts.
-func WithTree(
+func New(
 	ctx context.Context,
 	n browserapi.Notifications, interrupter term.Interrupter,
-	pkg PkgManager, loc LocationSetter,
+	pkg syntax.PkgManager, loc syntax.LocationSetter,
 	uri workspaceapi.URI, buf *cell.Buffer,
 	fc workspace.FlusherCloser,
-	opener Opener,
-	config Config,
-) *Tree {
+	opener syntax.Opener,
+	config syntax.Config,
+) syntax.Tree {
 	if config.ScheduleNextTick == nil {
 		panic("invalid config")
 	}
@@ -99,7 +97,7 @@ func WithTree(
 	ret.pkg = pkg
 	ret.loc = loc
 	ret.fc = fc
-	ret.statesubs = make(map[chan State]struct{})
+	ret.statesubs = make(map[chan syntax.State]struct{})
 	ret.waitingReady = make(chan struct{})
 
 	go debug.CapturePanicReport(func() {
@@ -111,7 +109,7 @@ func WithTree(
 				defer close(ret.waitingReady)
 				ret.mu.Lock()
 				defer ret.mu.Unlock()
-				ret.currState = State{Closed: ret.closed, ParserError: err.Error()}
+				ret.currState = syntax.State{Closed: ret.closed, ParserError: err.Error()}
 			})
 			return
 		}
@@ -121,7 +119,7 @@ func WithTree(
 			ret.mu.Lock()
 			defer ret.mu.Unlock()
 			if err != nil {
-				ret.currState = State{Closed: ret.closed, ParserError: err.Error()}
+				ret.currState = syntax.State{Closed: ret.closed, ParserError: err.Error()}
 			} else {
 				ret.updateCurrentState(files.langID)
 			}
@@ -134,12 +132,12 @@ func WithTree(
 type Tree struct {
 	n           browserapi.Notifications
 	interrupter term.Interrupter
-	pkg         PkgManager
-	loc         LocationSetter
-	config      Config
+	pkg         syntax.PkgManager
+	loc         syntax.LocationSetter
+	config      syntax.Config
 	fc          workspace.FlusherCloser
 	uri         workspaceapi.URI
-	opener      Opener
+	opener      syntax.Opener
 	buf         *cell.Buffer
 	cview       cell.View
 
@@ -163,8 +161,8 @@ type Tree struct {
 	indents           *tree_sitter.Query
 	folds             *tree_sitter.Query
 	locals            *tree_sitter.Query
-	statesubs         map[chan State]struct{}
-	currState         State
+	statesubs         map[chan syntax.State]struct{}
+	currState         syntax.State
 
 	onWillEditStart term.Coordinates
 	onWillEditEnd   term.Coordinates
@@ -195,12 +193,12 @@ func (t *Tree) IndentationAt(line int) (int, bool) {
 
 // State returns an iterator that eventually, when the Tree is ready
 // streams the current state of the tree, every time it's altered.
-func (t *Tree) State() iterator.Iterator[State] {
+func (t *Tree) State() iterator.Iterator[syntax.State] {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
 	if t.closed {
-		return iterator.FromSlice([]State{t.currState})
+		return iterator.FromSlice([]syntax.State{t.currState})
 	}
 
 	if !t.ready {
@@ -1125,7 +1123,7 @@ func appendHighlights(
 				continue
 			}
 			name := captureNames[cap.Index]
-			attr := captureNameAttributes(captureNamesAttributes, name)
+			attr := syntax.CaptureNameAttributes(captureNamesAttributes, name)
 			locations = append(locations, textapi.Location{
 				Attr: attr,
 				From: from,

@@ -47,7 +47,7 @@ import (
 	"unstable.build/rune/internal/handler/command"
 	"unstable.build/rune/internal/ide/idedebug"
 	"unstable.build/rune/internal/ide/ideshell"
-	"unstable.build/rune/internal/ide/syntax"
+	"unstable.build/rune/internal/ide/syntax/treesitter"
 	"unstable.build/rune/internal/text"
 	"unstable.build/rune/internal/text/texttest"
 	"unstable.build/rune/internal/text/vi"
@@ -548,7 +548,7 @@ func newE2EHarness(t *testing.T, dlvBin, dir string) *e2eHarness {
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = fs.Close() })
-	parser := syntax.NewParser(fs, pkg, uri)
+	parser := treesitter.NewParser(fs, pkg, uri)
 	h := New(mgr, br, ed, parser, fs, Config{
 		WorkspaceURI: uri,
 		Debugger:     dapCfg,

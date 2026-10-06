@@ -670,6 +670,13 @@ Native grammars, external scanners, language servers, debuggers, and toolchains
 may all have different cross-compilation requirements; successfully building the
 Go extension does not prove the package works on the target.
 
+Build `extension_<language>` with `CGO_ENABLED=0`. Without cgo the extension
+does not link against the build machine's C libraries, so one binary meets the
+platform floors in the [Prerequisites](../intro.md#prerequisites) and
+cross-compiles without a C toolchain. Rune's `make` builds every language
+extension this way and fails when one stops compiling without cgo, for example
+because it started importing a package that links Tree-sitter.
+
 Test the artifacts users will download, not only the staging directory. Inspect
 the final tarball and, when produced, the macOS notarization zip. Verify that
 required binaries and query files are present, executable permissions are
