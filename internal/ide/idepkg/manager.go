@@ -989,16 +989,13 @@ func (m *Manager) promptConfigChange(
 		if !approved {
 			return
 		}
-		var result ConfigMergeResult
 		userDoc, err := m.userConfigDocument()
 		if err == nil {
-			result, err = m.applyConfigMerge(pkgID, pkgVersion, userDoc, pkgDoc)
+			err = m.applyConfigMerge(ui, browserapi.LevelSuccess, pkgID, pkgVersion, userDoc, pkgDoc)
 		}
 		if err != nil {
 			_, _ = ui.Notify(browserapi.LevelError, "apply configuration: %s", err)
-			return
 		}
-		m.notifyConfigApplied(ui, browserapi.LevelSuccess, pkgID, result)
 	})
 }
 
@@ -1085,25 +1082,34 @@ func (e ConfigMergeEvent) AddedTutorialNames() []string {
 	return addedTutorialNames(e.Diff)
 }
 
-// ConfigMergeResult reports what a post-merge hook did. LiveApplied is true
-// when the hook applied changes to the running process such that a full
-// restart is not required for new work to observe them.
+// ConfigMergeResult reports what a post-merge hook did.
 type ConfigMergeResult struct {
-	LiveApplied bool
+	// LivePaths lists the config key paths whose merged values the running
+	// process picked up. Each entry covers the whole subtree under it. Diff
+	// keys not covered by any entry need a restart to take effect. Paths are
+	// segment slices rather than dotted strings because ids and names may
+	// contain dots.
+	LivePaths [][]string
 }
 
 // applyConfigMerge deep-merges addDoc into userDoc and writes the result to
 // the user config file atomically, after backing up the existing file. It is
 // shared by the auto-apply path (purely-new keys) and the prompt's Allow path
-// (version-dependent conflicts the user approved). On success it invokes the
-// post-merge hook (if configured) and returns its result.
+// (version-dependent conflicts the user approved). Once the file is written
+// it invokes the post-merge hook (if configured) and notifies ui at level
+// which keys are in effect and which need a restart. The notice is shown even
+// when the hook fails, since the config was saved; the hook's error is then
+// returned. A write error is returned without notifying.
 func (m *Manager) applyConfigMerge(
+	ui UI, level browserapi.NotificationLevel,
 	pkgID string, pkgVersion release.Version, userDoc, addDoc *yaml.Node,
-) (ConfigMergeResult, error) {
+) error {
 	if err := m.writeConfigMerge(userDoc, addDoc); err != nil {
-		return ConfigMergeResult{}, err
+		return err
 	}
-	return m.runAfterConfigMerge(pkgID, pkgVersion, addDoc)
+	result, err := m.runAfterConfigMerge(pkgID, pkgVersion, addDoc)
+	m.notifyConfigApplied(ui, level, pkgID, addDoc, result)
+	return err
 }
 
 func (m *Manager) writeConfigMerge(userDoc, addDoc *yaml.Node) error {
@@ -1146,18 +1152,26 @@ func (m *Manager) runAfterConfigMerge(
 	})
 }
 
-// notifyConfigApplied reports a successful config merge. When the post-merge
-// hook live-applied changes, no further action is requested from the user;
-// otherwise it keeps the restart-oriented wording.
+// notifyConfigApplied reports a saved config merge, naming the diff keys that
+// result made live and those that still need a restart.
 func (m *Manager) notifyConfigApplied(
-	ui UI, level browserapi.NotificationLevel, pkgID string, result ConfigMergeResult,
+	ui UI, level browserapi.NotificationLevel, pkgID string,
+	diff *yaml.Node, result ConfigMergeResult,
 ) {
-	if result.LiveApplied {
-		_, _ = ui.Notify(level, "applied %s configuration updates. ", pkgID)
-		return
+	inEffect, pending := summarizeConfigDiff(diff, result.LivePaths)
+	switch {
+	case len(pending) == 0:
+		_, _ = ui.Notify(level, "applied %s configuration updates. "+
+			"All changes are in effect now: %s.", pkgID, strings.Join(inEffect, ", "))
+	case len(inEffect) == 0:
+		_, _ = ui.Notify(level, "saved %s configuration updates to your config. "+
+			"None are in effect yet; restart the program to load: %s.",
+			pkgID, strings.Join(pending, ", "))
+	default:
+		_, _ = ui.Notify(level, "partially applied %s configuration updates. "+
+			"In effect now: %s. Restart the program to load: %s.",
+			pkgID, strings.Join(inEffect, ", "), strings.Join(pending, ", "))
 	}
-	_, _ = ui.Notify(level, "applied %s configuration updates. "+
-		"Restart the program to load the changes.", pkgID)
 }
 
 func (m *Manager) processConfig(
@@ -1224,11 +1238,11 @@ func (m *Manager) processConfigFile(
 
 	ui := m.ui(ctx)
 	if plan.autoApplyDoc != nil {
-		result, err := m.applyConfigMerge(pkgID, pkgVersion, plan.userDoc, plan.autoApplyDoc)
-		if err != nil {
+		if err := m.applyConfigMerge(
+			ui, browserapi.LevelInfo, pkgID, pkgVersion, plan.userDoc, plan.autoApplyDoc,
+		); err != nil {
 			return fmt.Errorf("auto-apply config change: %w", err)
 		}
-		m.notifyConfigApplied(ui, browserapi.LevelInfo, pkgID, result)
 	}
 	for _, change := range plan.pathChanges {
 		m.promptExtensionPathChange(ui, pkgID, change)

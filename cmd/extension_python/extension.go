@@ -74,19 +74,27 @@ func (e *pyExtension) ExtendWorkspace(
 		w.Editor(ctx),
 		w,
 		cfg,
-		w.DataDir(ctx),
+		hostDataDir(ctx, w),
 		w.Storage(ctx),
 		w.WindowManager(ctx),
 		w.RegisterREPLCommand,
 	)
 }
 
-// extendWorkspaceWith wires Python project discovery to per-root language
-// server bring-up. It registers the REPL command once for the workspace,
-// subscribes for opened .py files so a server is initialized rooted at
-// each file's nearest project, and eagerly initializes the workspace-root
-// project when one is present. The dependencies are passed positionally
-// so the compiler flags a missing one at every call site.
+type installRoot interface {
+	FindInstalledResource(ctx context.Context, relpath string) (string, error)
+}
+
+func hostDataDir(ctx context.Context, root installRoot) string {
+	dir, err := root.FindInstalledResource(ctx, ".")
+	if err != nil {
+		slog.Warn("resolve data directory on the workspace host; python shims disabled",
+			"error", err)
+		return ""
+	}
+	return dir
+}
+
 func (e *pyExtension) extendWorkspaceWith(
 	ctx context.Context,
 	fs workspaceapi.FileSystem,
@@ -165,16 +173,6 @@ func (e *pyExtension) extendWorkspaceWith(
 	return nil
 }
 
-// initializeProjectRoot performs the language-specific bring-up for a
-// discovered project root. The environment work (uv bootstrap, venv-aware
-// shims, debugpy prewarm) only runs once the user has agreed to let Rune
-// manage the root; ty and ruff are bundled tooling and come up either
-// way. The decision must be made before Initialize, which rejects a
-// second init for the same root.
-//
-// A loose-scripts root is never auto-managed: there is nothing to sync,
-// so guessing would cost a prompt and an interpreter download for no
-// gain. `python enable` still reaches it explicitly.
 func initializeProjectRoot(
 	ctx context.Context,
 	fs workspaceapi.FileSystem,
@@ -232,10 +230,6 @@ func initializeProjectRoot(
 	return nil
 }
 
-// findTool returns the name the python package ships, or "" so the
-// caller uses the one on the host's PATH. A package that ended up not
-// installed has already been explained to the user; any other miss is
-// worth a warning.
 func findTool(
 	ctx context.Context, tools *langext.Tools, notify browserapi.Notifications, name string,
 ) string {
@@ -248,9 +242,6 @@ func findTool(
 	return bin
 }
 
-// managedEnvironmentAllowed resolves the stored policy for root, asking
-// the user when there is no stored answer. A dismissed prompt is not
-// persisted, so the question is asked again next session.
 func managedEnvironmentAllowed(
 	ctx context.Context,
 	notify browserapi.Notifications,
@@ -278,9 +269,6 @@ func managedEnvironmentAllowed(
 	return answer
 }
 
-// setupManagedEnvironment bootstraps the uv environment rooted at root,
-// installs the venv-aware python shims and prewarms the debugpy adapter
-// env. It is shared by bring-up and `python enable`.
 func setupManagedEnvironment(
 	ctx context.Context,
 	fs workspaceapi.FileSystem,
@@ -335,12 +323,6 @@ func pyLogLevel(cfg config.Config, notify browserapi.Notifications) string {
 	}
 }
 
-// debugpyPin reads the optional `debugpy` config key: the version pin
-// used to prewarm the debug adapter's uvx environment right after the
-// project env syncs, so the first debug launch works offline. Unset
-// skips the prewarm; the pin must match the one in the package's
-// debugger.python.command so the prewarmed env is the one the adapter
-// resolves.
 func debugpyPin(cfg config.Config, notify browserapi.Notifications) string {
 	if cfg == nil {
 		return ""
@@ -357,9 +339,6 @@ func debugpyPin(cfg config.Config, notify browserapi.Notifications) string {
 	return pin
 }
 
-// prewarmDebugpy resolves the pinned debugpy into uvx's cached env by
-// running a no-op python through it. Best-effort: a failure only means
-// the first debug launch pays the resolution cost (or fails offline).
 func prewarmDebugpy(
 	ctx context.Context,
 	uvxBin string,
@@ -374,12 +353,6 @@ func prewarmDebugpy(
 	}
 }
 
-// readPyOverrides reads the optional top-level `command` and
-// `alternate_commands` config keys, returning "" and nil for the ones
-// not set. The caller keeps the ty/ruff defaults for those, except that
-// overriding `command` without supplying `alternate_commands` drops the
-// default ruff alternates, since they assume the ty+ruff split. Invalid
-// values warn and count as not set.
 func readPyOverrides(
 	cfg config.Config, notify browserapi.Notifications,
 ) (command string, alternates map[string]string) {
@@ -420,10 +393,6 @@ func readPyOverrides(
 	return command, alternates
 }
 
-// pyWatchEvents returns the editor events that drive project discovery,
-// defaulting to opens plus out-of-band changes and creates. Setting the
-// optional `watch_events` config key to false restores open-only
-// behavior, an escape hatch for pathological monorepos.
 func pyWatchEvents(cfg config.Config, notify browserapi.Notifications) []textapi.EventType {
 	openOnly := []textapi.EventType{textapi.EventTypeOpen}
 	onChange := []textapi.EventType{
@@ -444,14 +413,6 @@ func pyWatchEvents(cfg config.Config, notify browserapi.Notifications) []textapi
 	}
 }
 
-// pyDiagnosticMode reads the optional `diagnostic_mode` config key that
-// controls ty's diagnostic scope. It is opt-in: when unset, ty keeps
-// its default "openFilesOnly" scope. Only ty's documented values are
-// accepted ("off", "openFilesOnly", "workspace"); an unknown value
-// warns and is ignored. "workspace" makes ty type-check the whole
-// project and answer workspace/diagnostic pulls for unopened files, at
-// the cost of a full-project scan per pull, so it is left to the user
-// to enable per project.
 func pyDiagnosticMode(cfg config.Config, notify browserapi.Notifications) string {
 	if cfg == nil {
 		return ""

@@ -670,6 +670,24 @@ func (g *GUI) SetTheme(name string) (Theme, error) {
 	return theme, nil
 }
 
+// SetColorThemes replaces the set of themes available to SetTheme and Themes.
+// If the active theme is in themes, it is re-applied so a redefinition takes
+// effect, and its definition is returned with true. Otherwise it returns
+// false and the current colors are left alone: an active theme missing from
+// themes keeps rendering until the next SetTheme.
+// Like SetTheme, it must be called on the GUI loop.
+func (g *GUI) SetColorThemes(themes map[string]Theme) (Theme, bool) {
+	g.colorThemes = themes
+	if g.theme == "" {
+		return Theme{}, false
+	}
+	if _, ok := themes[g.theme]; !ok {
+		return Theme{}, false
+	}
+	theme, err := g.SetTheme(g.theme)
+	return theme, err == nil
+}
+
 // Theme returns the current theme. An empty string
 // indicates that no theme is set, so the default color scheme,
 // is used.
@@ -802,6 +820,7 @@ func (g *GUI) log(level log.Level, msg string, args ...any) {
 func (g *GUI) resetTheme() {
 	tcell.SetColorValues(g.originalColorValues)
 
+	g.theme = ""
 	g.defaultAttr.Fg = term.FromTcellColor(tcell.ColorWhite)
 	g.defaultAttr.Bg = term.FromTcellColor(tcell.ColorBlack)
 	g.cursorAttributes = term.Attributes{Bg: term.FromTcellColor(tcell.ColorRed)}

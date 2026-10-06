@@ -54,7 +54,7 @@ func newHostPackageManager(
 				return idepkg.ConfigMergeResult{}, nil
 			}
 			applyEnv()
-			return idepkg.ConfigMergeResult{LiveApplied: true}, nil
+			return idepkg.ConfigMergeResult{LivePaths: [][]string{{"gui", "env"}}}, nil
 		}))
 	if err := mgr.Reconcile(context.Background()); err != nil {
 		log.Warnf("packages: clean up incomplete installs: %v", err)

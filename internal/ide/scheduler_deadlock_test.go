@@ -71,7 +71,7 @@ func TestScheduleNextTickDoesNotReacquireHostLock(t *testing.T) {
 		component.FrameCharSetDefault())
 
 	h := new(workspaceManagerHandler)
-	h.tutorialsInstalled = func([]string) (bool, error) { return false, nil }
+	h.tutorialsInstalled = func([]string) ([]string, error) { return nil, nil }
 	err = h.init(nil, homeURI, manager,
 		notificationsConfig(), cfg, storage, dir,
 		func(term.Event) bool { return true },

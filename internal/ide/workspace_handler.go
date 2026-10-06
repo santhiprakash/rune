@@ -172,51 +172,16 @@ type workspaceManagerHandler struct {
 	frame                   bool
 	streamingOpen           bool
 	reloadConfig            func() (ideConfig, error)
-
-	// startupWorkspace records whether a workspace was requested at
-	// launch (non-empty cwd). It lets the IDE decide on Ready whether
-	// the user is intentionally landing on the home workspace, before
-	// the async cwd workspace install has completed.
-	startupWorkspace bool
-
-	// lastSession is the set of workspaces that were open when the
-	// previous session ended. It is loaded once, before the current
-	// session starts overwriting the persisted document, and consumed
-	// by the one-shot maybeReopenLastSession.
-	lastSession   idehistory.Session
-	reopenPending bool
-
-	// sessionReopenDisabled suppresses the reopen prompt entirely. It
-	// is set for instances spawned as secondary OS windows, which share
-	// the storage of the instance that spawned them and must not reopen
-	// its workspaces.
-	sessionReopenDisabled bool
-
-	packageConfigMergeHook func(idepkg.ConfigMergeEvent) (idepkg.ConfigMergeResult, error)
-
-	watchedFilesChangeHook func(int)
-
-	// tutorialsInstalled is a required dependency wired by the IDE at
-	// construction; afterPackageConfigMerge calls it unconditionally and a nil
-	// value is a construction bug that must panic, not be guarded.
-	tutorialsInstalled func(names []string) (bool, error)
-
-	// onboardingActive is wired by the IDE at construction and reports
-	// whether the bootstrap-started first-run tutorial flow is currently
-	// active; extension authorizers use it to grant verified-publisher
-	// commands without prompting while the tutorial overlay would bury
-	// the prompt. Nil (in tests) means never active.
-	onboardingActive func() bool
-
-	commandObserver *commandObserverRegistry
-
-	// commandHistory exposes the command prompt's persisted history so
-	// the built-in workspaceopen completer can surface previously opened
-	// workspaces alongside directory completion.
-	commandHistory command.HistoryAccessor
-
-	// workspaceOpenCompleters are scheme-provided workspaceopen
-	// completers keyed by scheme. See WithWorkspaceOpenCompleter.
+	startupWorkspace        bool
+	lastSession             idehistory.Session
+	reopenPending           bool
+	sessionReopenDisabled   bool
+	packageConfigMergeHook  func(idepkg.ConfigMergeEvent) (idepkg.ConfigMergeResult, error)
+	watchedFilesChangeHook  func(int)
+	tutorialsInstalled      func(names []string) ([]string, error)
+	onboardingActive        func() bool
+	commandObserver         *commandObserverRegistry
+	commandHistory          command.HistoryAccessor
 	workspaceOpenCompleters map[string]command.Completer
 
 	union               handler.FrameUnion
@@ -245,8 +210,6 @@ type workspaceManagerHandler struct {
 	closing             map[string]chan struct{}
 	closeWG             sync.WaitGroup
 
-	// Fields, not constants, so tests can shorten the extensionready
-	// readiness and command-registration timeouts.
 	extReadyWait   time.Duration
 	extCommandWait time.Duration
 	extHandleWait  time.Duration
@@ -1410,14 +1373,14 @@ func startUserExtension(
 	return nil
 }
 
-func (h *workspaceManagerHandler) startInstalledExtensions(ids []string) bool {
+func (h *workspaceManagerHandler) startInstalledExtensions(ids []string) []string {
 	if len(ids) == 0 {
-		return false
+		return nil
 	}
 	cfg, err := h.reloadConfig()
 	if err != nil {
 		log.Errorf("failed to reload config to start installed extensions: %v", err)
-		return false
+		return nil
 	}
 	userExtensions := cfg.extensions()
 
@@ -1434,7 +1397,7 @@ func (h *workspaceManagerHandler) startInstalledExtensions(ids []string) bool {
 		}
 	}
 	if len(toStart) == 0 {
-		return false
+		return nil
 	}
 
 	h.mu.Lock()
@@ -1467,22 +1430,13 @@ func (h *workspaceManagerHandler) startInstalledExtensions(ids []string) bool {
 		}
 	}
 	wg.Wait()
-	return true
+	started := make([]string, 0, len(toStart))
+	for _, a := range toStart {
+		started = append(started, a.id)
+	}
+	return started
 }
 
-// afterPackageConfigMerge is the post-merge hook wired into the package
-// manager. It starts any extension added under the `extensions:` config key so
-// the package's tools work without a restart, and composes the externally
-// supplied gui.env hook so both live-apply paths run. The gui.env hook runs
-// first because it applies the package's environment via os.Setenv, and the
-// extension processes spawned by startInstalledExtensions inherit os.Environ()
-// at fork time; starting them first would deny them those variables. Extension
-// start failures are logged (as in initExtensions), so the returned error is
-// the stored hook's, and LiveApplied is OR'd across both paths. Any tutorial
-// added under the `tutorials:` config key is live-registered (and the user
-// prompted) through tutorialsInstalled so a freshly-installed tutorial is
-// runnable without a restart; its error is joined onto the returned error so
-// idepkg can notify in one place.
 func (h *workspaceManagerHandler) afterPackageConfigMerge(
 	event idepkg.ConfigMergeEvent,
 ) (idepkg.ConfigMergeResult, error) {
@@ -1492,12 +1446,15 @@ func (h *workspaceManagerHandler) afterPackageConfigMerge(
 		result, err = h.packageConfigMergeHook(event)
 	}
 
-	startedExtension := h.startInstalledExtensions(event.AddedExtensionIDs())
-	result.LiveApplied = result.LiveApplied || startedExtension
+	for _, id := range h.startInstalledExtensions(event.AddedExtensionIDs()) {
+		result.LivePaths = append(result.LivePaths, []string{"extensions", id})
+	}
 
 	if names := event.AddedTutorialNames(); len(names) > 0 {
 		registered, tutErr := h.tutorialsInstalled(names)
-		result.LiveApplied = result.LiveApplied || registered
+		for _, name := range registered {
+			result.LivePaths = append(result.LivePaths, []string{"tutorials", name})
+		}
 		err = errors.Join(err, tutErr)
 	}
 	return result, err

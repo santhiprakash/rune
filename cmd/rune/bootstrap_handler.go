@@ -239,7 +239,7 @@ func (b *bootstrapHandler) buildConfiguredIDE(
 		ide.WithShellRCDir(b.shellRCDir),
 		ide.WithScheme(docsScheme, newDocsSchemeFunc(b.configPath)),
 		ide.WithTabsClickCallback(b.handleTabsClick),
-		ide.WithPackageConfigMergeHook(b.guiEnvLiveApplyHook),
+		ide.WithPackageConfigMergeHook(b.packageConfigMergeHook),
 		ide.WithDispatchOnPreview(cmdSetTheme,
 			func(cmd string, args ...string) (component.Responsive, func(), bool) {
 				if cmd != cmdSetTheme || b.g == nil {
@@ -445,7 +445,49 @@ func (b *bootstrapHandler) guiEnvLiveApplyHook(
 	} else if err := applyGUIEnvVars(env); err != nil {
 		return idepkg.ConfigMergeResult{}, fmt.Errorf("apply gui.env: %w", err)
 	}
-	return idepkg.ConfigMergeResult{LiveApplied: true}, nil
+	return idepkg.ConfigMergeResult{LivePaths: [][]string{{"gui", "env"}}}, nil
+}
+
+func (b *bootstrapHandler) guiThemesLiveApplyHook(
+	event idepkg.ConfigMergeEvent,
+) (idepkg.ConfigMergeResult, error) {
+	if !event.TouchesPath("gui", "themes") || b.g == nil {
+		return idepkg.ConfigMergeResult{}, nil
+	}
+	rootCfg, err := ide.Config(b.configPath, runeDefaultConfig())
+	if err != nil {
+		return idepkg.ConfigMergeResult{}, fmt.Errorf("reload config for gui.themes: %w", err)
+	}
+	guiCfg, ok, err := getGUIConfig(rootCfg)
+	if err != nil {
+		return idepkg.ConfigMergeResult{}, fmt.Errorf("load gui config: %w", err)
+	}
+	if !ok {
+		return idepkg.ConfigMergeResult{}, nil
+	}
+	scheduled := b.scheduleNextTick(func() {
+		themes := getGUIColorThemes(b.browser(), guiCfg)
+		if theme, reapplied := b.g.SetColorThemes(themes); reapplied {
+			b.currentIDE().SetDefaultAttributes(term.Attributes{
+				Fg: term.FromTcellColor(theme.Foreground),
+				Bg: term.FromTcellColor(theme.Background),
+			})
+		}
+	})
+	if !scheduled {
+		return idepkg.ConfigMergeResult{}, nil
+	}
+	return idepkg.ConfigMergeResult{LivePaths: [][]string{{"gui", "themes"}}}, nil
+}
+
+func (b *bootstrapHandler) packageConfigMergeHook(event idepkg.ConfigMergeEvent) (
+	idepkg.ConfigMergeResult, error,
+) {
+	env, envErr := b.guiEnvLiveApplyHook(event)
+	themes, themesErr := b.guiThemesLiveApplyHook(event)
+	return idepkg.ConfigMergeResult{
+		LivePaths: append(env.LivePaths, themes.LivePaths...),
+	}, errors.Join(envErr, themesErr)
 }
 
 func (b *bootstrapHandler) setupConfiguredIDE(

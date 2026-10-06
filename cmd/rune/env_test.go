@@ -63,7 +63,7 @@ func TestGUIEnvLiveApplyHookAppliesNewlyMergedVar(t *testing.T) {
 
 	result, err := b.guiEnvLiveApplyHook(event)
 	require.NoError(t, err)
-	assert.True(t, result.LiveApplied,
+	assert.Equal(t, [][]string{{"gui", "env"}}, result.LivePaths,
 		"merging a gui.env var must be reported as live-applied")
 	assert.Equal(t, envVal, os.Getenv(envKey),
 		"guiEnvLiveApplyHook must apply the freshly-merged gui.env to the live "+
@@ -84,7 +84,7 @@ func TestGUIEnvLiveApplyHookAppliesVarPresentAtStartup(t *testing.T) {
 	event := mergeEvent(t, "gui:\n  env:\n    "+envKey+": "+envVal+"\n")
 	result, err := b.guiEnvLiveApplyHook(event)
 	require.NoError(t, err)
-	assert.True(t, result.LiveApplied)
+	assert.Equal(t, [][]string{{"gui", "env"}}, result.LivePaths)
 	assert.Equal(t, envVal, os.Getenv(envKey))
 }
 
@@ -114,7 +114,7 @@ func TestGUIEnvLiveApplyHookStarlarkOverlayConfig(t *testing.T) {
 	require.NoError(t, err,
 		"gui.env reload must decode the Starlark overlay config against the "+
 			"full default tree")
-	assert.True(t, result.LiveApplied)
+	assert.Equal(t, [][]string{{"gui", "env"}}, result.LivePaths)
 	assert.Equal(t, envVal, os.Getenv(envKey))
 }
 
@@ -485,7 +485,7 @@ func TestApplyShellPATHAndGUIEnvWithPATHWaits(t *testing.T) {
 // bootstrapHandler against the given on-disk config, written to dataDir as
 // filename (config.yaml or config.star, selecting the decoder). A config file
 // in dataDir makes isBootstrapped true, so newBootstrapHandler builds the real
-// configured IDE (with the production guiEnvLiveApplyHook wired via
+// configured IDE (with the production packageConfigMergeHook wired via
 // WithPackageConfigMergeHook) instead of opening the OAuth bootstrap flow. The
 // apiclient is pointed at a 404 server so construction never touches the
 // network, and installBackupDir keeps install-ID tamper detection off the

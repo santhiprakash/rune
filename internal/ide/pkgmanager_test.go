@@ -844,7 +844,7 @@ func newTestWorkspaceManagerHandlerForPkgManager(
 	notiCfg := notificationsConfig()
 	notiCfg.Width = notificationsWidth
 	storage := localstorage.New(context.Background(), dir, docbson.Marshaler())
-	m.tutorialsInstalled = func([]string) (bool, error) { return false, nil }
+	m.tutorialsInstalled = func([]string) ([]string, error) { return nil, nil }
 	err = m.workspaceManagerHandler.init(nil, homeURI, manager,
 		notiCfg, cfg, storage,
 		dir, func(ev term.Event) bool {
@@ -936,7 +936,7 @@ func newTestWorkspaceManagerHandlerWithReleaseManager(
 	}
 
 	storage2 := localstorage.New(context.Background(), dir, docbson.Marshaler())
-	m.tutorialsInstalled = func([]string) (bool, error) { return false, nil }
+	m.tutorialsInstalled = func([]string) ([]string, error) { return nil, nil }
 	err = m.workspaceManagerHandler.init(nil, homeURI, manager,
 		notificationsConfig(), cfg, storage2,
 		dir, func(ev term.Event) bool {

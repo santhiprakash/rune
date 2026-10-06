@@ -18,8 +18,10 @@ package idepkg
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	log "github.com/sirupsen/logrus"
@@ -211,6 +213,46 @@ func addedTutorialNames(doc *yaml.Node) []string {
 		names = append(names, node.Content[i].Value)
 	}
 	return names
+}
+
+// summarizeConfigDiff splits the leaf key paths of an applied config diff
+// into those covered by a prefix in live (inEffect) and the rest (pending).
+// A scalar, a sequence or an empty mapping is a leaf. Each reported key is
+// the leaf path truncated to its first two segments and joined with ".", e.g.
+// gui.themes.redmond95.foreground reports as "gui.themes"; both lists are
+// deduplicated and sorted. Live paths that cover no diff leaf are ignored.
+func summarizeConfigDiff(doc *yaml.Node, live [][]string) (inEffect, pending []string) {
+	root := doc
+	if root != nil && root.Kind == yaml.DocumentNode && len(root.Content) > 0 {
+		root = root.Content[0]
+	}
+	if root == nil || root.Kind != yaml.MappingNode {
+		return nil, nil
+	}
+
+	inEffectSet := make(map[string]struct{})
+	pendingSet := make(map[string]struct{})
+	var walk func(node *yaml.Node, path []string)
+	walk = func(node *yaml.Node, path []string) {
+		if node.Kind == yaml.MappingNode && len(node.Content) > 0 {
+			for i := 0; i+1 < len(node.Content); i += 2 {
+				walk(node.Content[i+1], append(slices.Clip(path), node.Content[i].Value))
+			}
+			return
+		}
+		key := strings.Join(path[:min(len(path), 2)], ".")
+		if slices.ContainsFunc(live, func(prefix []string) bool {
+			return len(prefix) <= len(path) && slices.Equal(path[:len(prefix)], prefix)
+		}) {
+			inEffectSet[key] = struct{}{}
+		} else {
+			pendingSet[key] = struct{}{}
+		}
+	}
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		walk(root.Content[i+1], []string{root.Content[i].Value})
+	}
+	return slices.Sorted(maps.Keys(inEffectSet)), slices.Sorted(maps.Keys(pendingSet))
 }
 
 // expandRuneVars expands only the variables for which lookup returns

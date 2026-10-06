@@ -80,7 +80,9 @@ Everything that belongs to the process or to the GUI window is built once at
 startup and needs a restart:
 
 - all `gui.*` settings: fonts, themes, ligatures, opacity, blur,
-  scroll multiplier, key mapping, quick menu, `gui.env`
+  scroll multiplier, key mapping, quick menu, `gui.env`. Themes and
+  `gui.env` variables added by a package install are available right away
+  (see below).
 - `log.output_path` and `log.level`
 - `models.*` (the LLM router), `notifications.*`, `telemetry.*`
 - `animations.*`, `workspace.home`, clipboard and macro settings
@@ -99,8 +101,9 @@ fonts, themes and window settings. Everything else in the restart list is
 per-process too, so the new window picks those up as well.
 
 Installing a package is the one case where config is applied without a reload:
-`gui.env` variables, newly added extensions and newly added tutorials are
-picked up live. If a package changes anything else, Rune tells you to restart.
+`gui.env` variables, `gui.themes`, newly added extensions and newly added
+tutorials take effect live. When the install finishes, the notification lists
+which keys are in effect now and which need a restart.
 
 ## Editor Modes
 

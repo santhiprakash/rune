@@ -1139,3 +1139,88 @@ func TestConfigMergeEventAddedTutorialNames(t *testing.T) {
 	e := ConfigMergeEvent{Diff: doc}
 	assert.Equal(t, []string{"go-intro"}, e.AddedTutorialNames())
 }
+
+func TestSummarizeConfigDiff(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name         string
+		doc          string
+		live         [][]string
+		wantInEffect []string
+		wantPending  []string
+	}{
+		{
+			name:         "all live",
+			doc:          "gui:\n  env:\n    FOO: bar\n    BAZ: qux\n",
+			live:         [][]string{{"gui", "env"}},
+			wantInEffect: []string{"gui.env"},
+		},
+		{
+			name:         "partial",
+			doc:          "gui:\n  env:\n    FOO: bar\n  font_size: 14\n",
+			live:         [][]string{{"gui", "env"}},
+			wantInEffect: []string{"gui.env"},
+			wantPending:  []string{"gui.font_size"},
+		},
+		{
+			name:        "none live",
+			doc:         "settings:\n  theme: dark\ngui:\n  env:\n    FOO: bar\n",
+			wantPending: []string{"gui.env", "settings.theme"},
+		},
+		{
+			name: "nested theme leaves covered by gui.themes",
+			doc: "gui:\n  themes:\n    redmond95:\n      foreground: '#000000'\n" +
+				"      background: '#c0c0c0'\n      colors:\n        red: '#800000'\n",
+			live:         [][]string{{"gui", "themes"}},
+			wantInEffect: []string{"gui.themes"},
+		},
+		{
+			name:         "extension path covered by its id",
+			doc:          "extensions:\n  rune.agent:\n    path: /bin/agent\n  other:\n    path: /bin/other\n",
+			live:         [][]string{{"extensions", "rune.agent"}},
+			wantInEffect: []string{"extensions.rune.agent"},
+			wantPending:  []string{"extensions.other"},
+		},
+		{
+			name:        "empty mapping is a leaf",
+			doc:         "gui:\n  themes: {}\n",
+			wantPending: []string{"gui.themes"},
+		},
+		{
+			name:         "sequence is a leaf",
+			doc:          "gui:\n  fonts:\n    - a\n    - b\n",
+			live:         [][]string{{"gui", "fonts"}},
+			wantInEffect: []string{"gui.fonts"},
+		},
+		{
+			name:        "top-level scalar",
+			doc:         "default_shell: zsh\n",
+			wantPending: []string{"default_shell"},
+		},
+		{
+			name:        "live path not in diff is ignored",
+			doc:         "settings:\n  theme: dark\n",
+			live:        [][]string{{"gui", "env"}},
+			wantPending: []string{"settings.theme"},
+		},
+		{
+			name:         "live path deeper than the leaf does not cover it",
+			doc:          "gui:\n  themes: {}\n",
+			live:         [][]string{{"gui", "themes", "redmond95"}},
+			wantPending:  []string{"gui.themes"},
+			wantInEffect: nil,
+		},
+		{
+			name: "empty doc",
+			doc:  "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			inEffect, pending := summarizeConfigDiff(mustParseYAML(t, tt.doc), tt.live)
+			assert.Equal(t, tt.wantInEffect, inEffect)
+			assert.Equal(t, tt.wantPending, pending)
+		})
+	}
+}

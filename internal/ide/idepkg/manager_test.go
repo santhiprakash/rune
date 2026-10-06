@@ -1819,7 +1819,7 @@ func TestInstallConfigExtensionPathPrompt(t *testing.T) {
 			var mergeHookCalls int
 			m.afterConfigMerge = func(ConfigMergeEvent) (ConfigMergeResult, error) {
 				mergeHookCalls++
-				return ConfigMergeResult{LiveApplied: true}, nil
+				return ConfigMergeResult{LivePaths: [][]string{{"extensions", pkgID}}}, nil
 			}
 			m.wm = &mockWindowManager{
 				floatingFn: func(h browserapi.Floating, _ browserapi.FloatingConfig) (browserapi.Window, error) {
@@ -2112,7 +2112,9 @@ func TestInstallAsksTheUIOfItsContext(t *testing.T) {
 	assert.Equal(t, []PromptOption{{Label: "Allow", Key: 'a'}, {Label: "Deny", Key: 'd'}},
 		ui.prompts[0].Options)
 	assert.Equal(t, []string{
-		"applied configpkg configuration updates. Restart the program to load the changes.",
+		"saved configpkg configuration updates to your config. " +
+			"None are in effect yet; restart the program to load: " +
+			"settings.indent, settings.newkey, settings.theme.",
 	}, notificationMessages(ui.Notifications), "the new settings are applied without asking")
 
 	// Another merge lands before the user answers; approving must not
@@ -2127,7 +2129,13 @@ func TestInstallAsksTheUIOfItsContext(t *testing.T) {
 		merged["env"].(map[string]any)["GOROOT"])
 	assert.Equal(t, "added", fmt.Sprint(merged["settings"].(map[string]any)["newkey"]))
 	assert.Equal(t, "kept", merged["other"])
-	assert.Len(t, notificationMessages(ui.Notifications), 2)
+	assert.Equal(t, []string{
+		"saved configpkg configuration updates to your config. " +
+			"None are in effect yet; restart the program to load: env.GOROOT.",
+		"saved configpkg configuration updates to your config. " +
+			"None are in effect yet; restart the program to load: " +
+			"settings.indent, settings.newkey, settings.theme.",
+	}, notificationMessages(ui.Notifications))
 	assert.Empty(t, n.Active(), "nothing is shown to the Manager's own user")
 }
 
@@ -4258,7 +4266,7 @@ func TestAfterConfigMergeHook(t *testing.T) {
 			events = append(events, e)
 			data, _ := os.ReadFile(m.configPath)
 			configOnDisk = string(data)
-			return ConfigMergeResult{LiveApplied: true}, nil
+			return ConfigMergeResult{LivePaths: [][]string{{"gui", "env"}}}, nil
 		}
 
 		pkgConfig := filepath.Join(t.TempDir(), "config.yaml")
@@ -4276,59 +4284,63 @@ func TestAfterConfigMergeHook(t *testing.T) {
 			"hook must run after the merged config is written to disk")
 	})
 
-	t.Run("live-applied result yields env-oriented notification", func(t *testing.T) {
+	t.Run("notification names the keys in effect and pending", func(t *testing.T) {
 		t.Parallel()
-		pkgs := idepkgtest.MakePackages()
-		versions := idepkgtest.MakeBundles([]release.Bundle{{Package: "vpkg", Version: "1"}})
-		m, n, _, _ := newTestManager(t, pkgs, versions)
-		require.NoError(t, os.WriteFile(m.configPath, []byte("existing: true\n"), 0o644))
-		m.afterConfigMerge = func(ConfigMergeEvent) (ConfigMergeResult, error) {
-			return ConfigMergeResult{LiveApplied: true}, nil
+		for _, tt := range []struct {
+			name      string
+			pkgConfig string
+			hook      ConfigMergeResult
+			hookErr   error
+			want      string
+		}{
+			{
+				name:      "fully applied",
+				pkgConfig: "gui:\n  env:\n    FOO: bar\n",
+				hook:      ConfigMergeResult{LivePaths: [][]string{{"gui", "env"}}},
+				want:      "applied vpkg configuration updates. All changes are in effect now: gui.env.",
+			},
+			{
+				name:      "nothing live",
+				pkgConfig: "settings:\n  theme: dark\n",
+				want: "saved vpkg configuration updates to your config. " +
+					"None are in effect yet; restart the program to load: settings.theme.",
+			},
+			{
+				name:      "partially applied",
+				pkgConfig: "gui:\n  env:\n    FOO: bar\nsettings:\n  theme: dark\n",
+				hook:      ConfigMergeResult{LivePaths: [][]string{{"gui", "env"}}},
+				want: "partially applied vpkg configuration updates. " +
+					"In effect now: gui.env. Restart the program to load: settings.theme.",
+			},
+			{
+				name:      "hook error still reports the saved config",
+				pkgConfig: "gui:\n  env:\n    FOO: bar\n",
+				hookErr:   errors.New("boom"),
+				want: "saved vpkg configuration updates to your config. " +
+					"None are in effect yet; restart the program to load: gui.env.",
+			},
+		} {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+				pkgs := idepkgtest.MakePackages()
+				versions := idepkgtest.MakeBundles([]release.Bundle{{Package: "vpkg", Version: "1"}})
+				m, n, _, _ := newTestManager(t, pkgs, versions)
+				require.NoError(t, os.WriteFile(m.configPath, []byte("existing: true\n"), 0o644))
+				m.afterConfigMerge = func(ConfigMergeEvent) (ConfigMergeResult, error) {
+					return tt.hook, tt.hookErr
+				}
+
+				pkgConfig := filepath.Join(t.TempDir(), "config.yaml")
+				require.NoError(t, os.WriteFile(pkgConfig, []byte(tt.pkgConfig), 0o644))
+				err := m.processConfig(context.Background(), "vpkg", release.Version("1"), pkgConfig)
+				if tt.hookErr != nil {
+					require.ErrorIs(t, err, tt.hookErr)
+				} else {
+					require.NoError(t, err)
+				}
+				assert.Equal(t, []string{tt.want}, notificationMessages(n))
+			})
 		}
-
-		pkgConfig := filepath.Join(t.TempDir(), "config.yaml")
-		require.NoError(t, os.WriteFile(pkgConfig, []byte(
-			"gui:\n  env:\n    FOO: bar\n"), 0o644))
-		require.NoError(t, m.processConfig(context.Background(), "vpkg", release.Version("1"), pkgConfig))
-
-		require.True(t, hasNotificationContaining(n, "applied vpkg configuration updates"))
-		assert.False(t, hasNotificationContaining(n, "Restart the program"))
-	})
-
-	t.Run("non-live result keeps restart notification", func(t *testing.T) {
-		t.Parallel()
-		pkgs := idepkgtest.MakePackages()
-		versions := idepkgtest.MakeBundles([]release.Bundle{{Package: "vpkg", Version: "1"}})
-		m, n, _, _ := newTestManager(t, pkgs, versions)
-		require.NoError(t, os.WriteFile(m.configPath, []byte("existing: true\n"), 0o644))
-		m.afterConfigMerge = func(ConfigMergeEvent) (ConfigMergeResult, error) {
-			return ConfigMergeResult{}, nil
-		}
-
-		pkgConfig := filepath.Join(t.TempDir(), "config.yaml")
-		require.NoError(t, os.WriteFile(pkgConfig, []byte(
-			"settings:\n  theme: dark\n"), 0o644))
-		require.NoError(t, m.processConfig(context.Background(), "vpkg", release.Version("1"), pkgConfig))
-
-		require.True(t, hasNotificationContaining(n, "Restart the program"))
-	})
-
-	t.Run("hook error propagates through auto-apply", func(t *testing.T) {
-		t.Parallel()
-		pkgs := idepkgtest.MakePackages()
-		versions := idepkgtest.MakeBundles([]release.Bundle{{Package: "vpkg", Version: "1"}})
-		m, _, _, _ := newTestManager(t, pkgs, versions)
-		require.NoError(t, os.WriteFile(m.configPath, []byte("existing: true\n"), 0o644))
-		m.afterConfigMerge = func(ConfigMergeEvent) (ConfigMergeResult, error) {
-			return ConfigMergeResult{}, errors.New("boom")
-		}
-
-		pkgConfig := filepath.Join(t.TempDir(), "config.yaml")
-		require.NoError(t, os.WriteFile(pkgConfig, []byte(
-			"gui:\n  env:\n    FOO: bar\n"), 0o644))
-		err := m.processConfig(context.Background(), "vpkg", release.Version("1"), pkgConfig)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "boom")
 	})
 
 	t.Run("prompt allow invokes hook, deny does not", func(t *testing.T) {
@@ -4378,15 +4390,6 @@ func TestAfterConfigMergeHook(t *testing.T) {
 			assert.Equal(t, 0, run(t, true))
 		})
 	})
-}
-
-func hasNotificationContaining(n *idepkgtest.Notifications, substr string) bool {
-	for _, noti := range n.Active() {
-		if strings.Contains(noti.Msg, substr) {
-			return true
-		}
-	}
-	return false
 }
 
 const (

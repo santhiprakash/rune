@@ -143,8 +143,9 @@ func (p *packages) Install(
 	}
 	return stream.Send(&pkgrpcpb.ChangeEvent{
 		Event: &pkgrpcpb.ChangeEvent_Notice{Notice: &pkgrpcpb.Notice{
-			Level:   uint32(browserapi.LevelSuccess),
-			Message: fmt.Sprintf("applied %s configuration updates", id),
+			Level: uint32(browserapi.LevelSuccess),
+			Message: fmt.Sprintf("applied %s configuration updates. "+
+				"All changes are in effect now: gui.env.", id),
 		}},
 	})
 }
