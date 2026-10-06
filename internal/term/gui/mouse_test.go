@@ -19,8 +19,10 @@ package gui
 import (
 	"image"
 	"math"
+	"strings"
 	"testing"
 	"time"
+	"unicode"
 
 	ebiten "github.com/hajimehoshi/ebiten/v2"
 	"github.com/stretchr/testify/assert"
@@ -840,12 +842,12 @@ func TestProcessMouseHeldDragRepeatsOncePerWake(t *testing.T) {
 	_, ok := tterm.SubCellFractionFromContext(repeat[0].Context)
 	assert.True(t, ok, "repeats carry the same sub-cell payload as motion events")
 
-	// Releasing stands the repeat down; stillness with no button stays
-	// silent however much time passes.
+	// Releasing stands the repeat down; a still frame with no button
+	// stays silent well past the repeat cadence.
 	delete(mock.pressedButtons, ebiten.MouseButtonLeft)
 	require.Len(t, mouse.processMouse(), 1, "release event")
 	assert.Nil(t, clk.armed())
-	clk.now = clk.now.Add(time.Hour)
+	clk.now = clk.now.Add(5 * time.Second)
 	assert.Empty(t, mouse.processMouse())
 }
 
@@ -856,10 +858,10 @@ func TestProcessMouseHeldStillInPressCellStaysSilent(t *testing.T) {
 	mock.cursorPosition = image.Point{X: 40, Y: 40}
 	require.Len(t, mouse.processMouse(), 1, "press")
 
-	// A click held in its own cell produces nothing, however long it is
-	// held: repeats start only once the drag leaves the press cell, so
-	// a slow ordinary click never reads as a drag.
-	clk.now = clk.now.Add(time.Hour)
+	// A click held in its own cell produces nothing well past the
+	// repeat cadence: repeats start only once the drag leaves the
+	// press cell, so a slow ordinary click never reads as a drag.
+	clk.now = clk.now.Add(5 * time.Second)
 	assert.Empty(t, mouse.processMouse())
 	assert.Empty(t, clk.timers, "a press held in its own cell never arms the repeat")
 
@@ -879,7 +881,7 @@ func TestProcessMouseDragRepeatIsLeftButtonOnly(t *testing.T) {
 		mock.cursorPosition = image.Point{X: 120, Y: 120}
 		require.Len(t, mouse.processMouse(), 1, "drag")
 
-		clk.now = clk.now.Add(time.Hour)
+		clk.now = clk.now.Add(5 * time.Second)
 		assert.Empty(t, mouse.processMouse(),
 			"a held non-left drag produces no repeats")
 		assert.Empty(t, clk.timers)
@@ -902,7 +904,7 @@ func TestProcessMouseDragReturnToPressCellDisarms(t *testing.T) {
 	mock.cursorPosition = image.Point{X: 40, Y: 40}
 	require.Len(t, mouse.processMouse(), 1, "drag back")
 	assert.Nil(t, clk.armed())
-	clk.now = clk.now.Add(time.Hour)
+	clk.now = clk.now.Add(5 * time.Second)
 	assert.Empty(t, mouse.processMouse())
 }
 
@@ -939,22 +941,29 @@ func TestProcessMouseStillFrameWithoutButtonStaysSilent(t *testing.T) {
 	require.Len(t, mouse.processMouse(), 1, "first move dispatches")
 	assert.Empty(t, mouse.processMouse(), "identical follow-up frame does not dispatch")
 
-	// The repeat source only exists for drags: however much time passes,
-	// a still frame with no held button must keep producing nothing and
-	// never arm a wake.
-	clk.now = clk.now.Add(time.Hour)
+	// The repeat source only exists for drags: well past the repeat
+	// cadence, a still frame with no held button must keep producing
+	// nothing and never arm a wake.
+	clk.now = clk.now.Add(5 * time.Second)
 	assert.Empty(t, mouse.processMouse())
 	assert.Empty(t, clk.timers)
 }
 
 // recordingMouseDelegate implements the SDK's mouse.Delegate for the
-// held-drag integration test: it counts scrolled lines and records the
-// selection endpoints it was asked to extend to.
+// held-drag integration test over a fixed line buffer. It models
+// selection the way real delegates do — SetSelectionStart anchors it,
+// SetSelectionEnd extends the cursor, SelectWordAt resolves the word
+// under the position like component.Scroll.WordAt does — and counts
+// scrolled lines, so tests can assert which range stayed selected and
+// how far the view moved, not just that a callback fired.
 type recordingMouseDelegate struct {
 	height  int
+	lines   []string
 	scrolls int
 	ends    []term.Coordinates
-	words   []term.Coordinates
+	anchor  term.Coordinates
+	cursor  term.Coordinates
+	hasSel  bool
 }
 
 func (d *recordingMouseDelegate) OnAction(term.Event, term.Coordinates, sdkmouse.Action) bool {
@@ -965,15 +974,58 @@ func (d *recordingMouseDelegate) ScrollUp(n int) bool   { d.scrolls += n; return
 func (d *recordingMouseDelegate) ScrollDown(n int) bool { d.scrolls += n; return true }
 func (d *recordingMouseDelegate) SetSelectionEnd(pos term.Coordinates) {
 	d.ends = append(d.ends, pos)
+	if !d.hasSel {
+		return
+	}
+	d.cursor = pos
 }
-func (d *recordingMouseDelegate) SetSelectionStart(term.Coordinates) {}
-func (d *recordingMouseDelegate) ClearSelection()                    {}
+func (d *recordingMouseDelegate) SetSelectionStart(pos term.Coordinates) {
+	d.anchor = pos
+	d.cursor = pos
+	d.hasSel = true
+}
+func (d *recordingMouseDelegate) ClearSelection() { d.hasSel = false }
 func (d *recordingMouseDelegate) SelectWordAt(pos term.Coordinates) {
-	d.words = append(d.words, pos)
+	if pos.Y < 0 || pos.Y >= len(d.lines) {
+		return
+	}
+	line := []rune(d.lines[pos.Y])
+	if pos.X < 0 || pos.X >= len(line) || !isWordChar(line[pos.X]) {
+		return
+	}
+	start := pos.X
+	for start > 0 && isWordChar(line[start-1]) {
+		start--
+	}
+	end := pos.X
+	for end < len(line) && isWordChar(line[end]) {
+		end++
+	}
+	d.anchor = term.Coordinates{X: start, Y: pos.Y}
+	d.cursor = term.Coordinates{X: end, Y: pos.Y}
+	d.hasSel = true
 }
-func (d *recordingMouseDelegate) SelectLine(int) {}
-func (d *recordingMouseDelegate) Width() int     { return 40 }
-func (d *recordingMouseDelegate) Height() int    { return d.height }
+func (d *recordingMouseDelegate) SelectLine(y int) {
+	if y < 0 || y >= len(d.lines) {
+		return
+	}
+	d.anchor = term.Coordinates{Y: y}
+	d.cursor = term.Coordinates{X: len([]rune(d.lines[y])), Y: y}
+	d.hasSel = true
+}
+func (d *recordingMouseDelegate) Width() int  { return 40 }
+func (d *recordingMouseDelegate) Height() int { return d.height }
+
+// selection reports the anchor and cursor of the live selection, if any.
+func (d *recordingMouseDelegate) selection() (anchor, cursor term.Coordinates, ok bool) {
+	return d.anchor, d.cursor, d.hasSel
+}
+
+// isWordChar matches the matcher component.Scroll.WordAt selects with:
+// letters, digits, and underscore.
+func isWordChar(r rune) bool {
+	return unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_'
+}
 
 // newRepeatTestGUI builds a real GUI around handler and rewires its
 // mouse to the mock manager plus a fake clock, so gui.Update runs the
@@ -1065,6 +1117,23 @@ func TestUpdateHeldDragSchedulesFramesAndKeepsScrolling(t *testing.T) {
 	require.NoError(t, gui.Update())
 	assert.Equal(t, eventsBefore+1, len(handled), "a stall resumes, it does not burst")
 
+	// Dragging back inside the window and holding still keeps the
+	// repeat armed — the pointer left its press cell — but mid-pane
+	// repeats extend the selection to the cell they already sit on:
+	// the endpoint holds and nothing scrolls.
+	mock.cursorPosition = image.Point{X: 40, Y: defaultHeight / 2}
+	tick(t, gui, clk, 0)
+	require.NotNil(t, clk.armed(), "a held drag off its press cell stays armed")
+	mid := delegate.ends[len(delegate.ends)-1]
+	before = delegate.scrolls
+	for range 2 {
+		tick(t, gui, clk, baseDragRepeatInterval)
+	}
+	assert.Equal(t, before, delegate.scrolls,
+		"held-still repeats away from the edge must not scroll")
+	assert.Equal(t, mid, delegate.ends[len(delegate.ends)-1],
+		"held-still repeats land on the held cell")
+
 	// Release stands the repeat down and delivers the release event.
 	delete(mock.pressedButtons, ebiten.MouseButtonLeft)
 	tick(t, gui, clk, 0)
@@ -1073,7 +1142,7 @@ func TestUpdateHeldDragSchedulesFramesAndKeepsScrolling(t *testing.T) {
 }
 
 func TestUpdateHeldClickProducesNoRepeats(t *testing.T) {
-	delegate := &recordingMouseDelegate{}
+	delegate := &recordingMouseDelegate{lines: make([]string, 40)}
 	dispatch := sdkmouse.New(delegate)
 	var handled []term.Event
 	gui, mock, clk := newRepeatTestGUI(t, &mockHandler{
@@ -1086,6 +1155,13 @@ func TestUpdateHeldClickProducesNoRepeats(t *testing.T) {
 	})
 	delegate.height = gui.mouse.height
 
+	// The word sits under the clicked cell wherever the font metrics
+	// land it; wordStart/wordEnd bound it exactly.
+	pressCell := gui.mouse.cellAt(40, 40)
+	delegate.lines[pressCell.Y] = strings.Repeat(" ", pressCell.X) + "delta more"
+	wordStart := term.Coordinates{X: pressCell.X, Y: pressCell.Y}
+	wordEnd := term.Coordinates{X: pressCell.X + len("delta"), Y: pressCell.Y}
+
 	// A double-click held a beat too long must stay a word select:
 	// while the pointer sits in its press cell the repeat never arms,
 	// so nothing re-reads the hold as a drag and shrinks the selection.
@@ -1096,14 +1172,27 @@ func TestUpdateHeldClickProducesNoRepeats(t *testing.T) {
 	tick(t, gui, clk, 0)
 	mock.pressedButtons[ebiten.MouseButtonLeft] = struct{}{}
 	tick(t, gui, clk, 0)
-	require.Len(t, delegate.words, 1, "the second click selects the word")
 
-	clk.now = clk.now.Add(time.Hour)
+	anchor, cursor, ok := delegate.selection()
+	require.True(t, ok, "the second click selects a word")
+	assert.Equal(t, wordStart, anchor,
+		"a single char, the line, or the screen all fail this check")
+	assert.Equal(t, wordEnd, cursor,
+		"a single char, the line, or the screen all fail this check")
+
+	// A press held in its own cell never arms the repeat, so seconds
+	// of stillness must not move the selection: a repeat here would
+	// dispatch SetSelectionEnd and collapse the word onto the pointer.
+	clk.now = clk.now.Add(5 * time.Second)
 	clk.fireDue()
 	require.NoError(t, gui.Update())
 	assert.Empty(t, clk.timers, "a held press in its own cell never arms the repeat")
 	assert.Empty(t, delegate.ends,
 		"no repeat means nothing drags the word selection back to the pointer")
+	anchor, cursor, ok = delegate.selection()
+	require.True(t, ok)
+	assert.Equal(t, wordStart, anchor)
+	assert.Equal(t, wordEnd, cursor)
 
 	delete(mock.pressedButtons, ebiten.MouseButtonLeft)
 	tick(t, gui, clk, 0)
